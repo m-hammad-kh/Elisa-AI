@@ -1,6 +1,6 @@
 "use client"
 import React from 'react';
-import { Monitor, MessageSquare, Code, Smartphone, Download, CheckCircle, Sparkles, Layout, Globe, Palette, Shield, Zap, MousePointer2 } from 'lucide-react';
+import { Monitor, MessageSquare, Code, Download, Zap, MousePointer2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const features = [
@@ -85,13 +85,6 @@ function Features() {
         </section>
     );
 }
-
-// Dummy ArrowRight for compilation if lucide-react doesn't have it in context (though it should)
-const ArrowRight = ({ className }) => (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-    </svg>
-);
 
 export default Features;
 

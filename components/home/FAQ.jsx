@@ -1,7 +1,7 @@
-﻿"use client"
+"use client"
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, ChevronUp, HelpCircle } from 'lucide-react';
+import { ChevronDown, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const faqs = [

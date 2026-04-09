@@ -1,6 +1,6 @@
 "use client"
 import { MessagesContext } from '@/context/MessagesContext';
-import { Loader2Icon, Send, MousePointer2, MessageSquareOff, MessageSquare } from 'lucide-react';
+import { Loader2Icon, MousePointer2, MessageSquareOff, MessageSquare } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { useConvex } from 'convex/react';
 import { useParams } from 'next/navigation';

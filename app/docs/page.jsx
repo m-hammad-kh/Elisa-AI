@@ -1,7 +1,6 @@
 "use client"
 import React from 'react';
-import { Book, Code, Zap, Globe, Shield, Sparkles, MousePointer2, RotateCcw, Download, Layout, ArrowRight, Terminal } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Zap, Globe, Download, Layout, ArrowRight, Terminal, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 
 function DocsPage() {

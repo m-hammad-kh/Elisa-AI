@@ -1,7 +1,7 @@
 "use client"
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Brain, Zap, Clock, Rocket, Sparkles } from 'lucide-react';
+import { Brain, Clock, Rocket, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useUser, useClerk } from '@clerk/clerk-react';
 

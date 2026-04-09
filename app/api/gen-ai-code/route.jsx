@@ -390,7 +390,6 @@ export async function POST(req) {
         
         const filePaths = Object.keys(allFiles);
         const usedImagesGlobal = new Set();
-        const queryImageCache = new Map(); // Cache results per query to reuse them efficiently
 
         for (const filePath of filePaths) {
             let code = toCodeString(allFiles[filePath]);

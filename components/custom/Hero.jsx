@@ -1,16 +1,14 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿"use client"
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿"use client"
 import React from "react";
 import Link from "next/link";
-import { ArrowRight, Sparkles, Zap, Shield, Rocket } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { motion } from "framer-motion";
 import { useClerk, useUser } from "@clerk/clerk-react";
-import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 
 function Hero() {
   const { user } = useUser();
   const { openSignIn } = useClerk();
-  const router = useRouter();
   
   const phrases = [
     ["STOP", "THINKING", "START", "BUILDING"],

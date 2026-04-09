@@ -23,8 +23,6 @@ import {
     Smartphone, 
     Tablet, 
     Monitor, 
-    Moon, 
-    Sun,
     Code,
     Eye,
     RotateCw,
@@ -165,7 +163,7 @@ function CodeView() {
     // Novelty Features State
     const [previewDevice, setPreviewDevice] = useState('desktop'); // desktop, tablet, mobile
     const [editorTheme, setEditorTheme] = useState('dark');
-    const { resolvedTheme, setTheme } = useTheme();
+    const { resolvedTheme } = useTheme();
 
     useEffect(() => {
         if (!resolvedTheme) return;
@@ -545,18 +543,16 @@ export default Navbar;`
         const defaultFiles = preprocessFiles(Lookup.DEFAULT_FILE);
         const mergedFiles = { ...defaultFiles, ...processedFiles };
         const normalizedFiles = normalizeGeneratedFiles(mergedFiles);
-        if (userId) {
-            try {
-                if (JSON.stringify(normalizedFiles) !== JSON.stringify(mergedFiles)) {
-                    UpdateFiles({
-                        workspaceId: id,
-                        userId,
-                        files: normalizedFiles
-                    });
-                }
-            } catch (e) {
-                // ignore normalization sync errors
+        try {
+            if (JSON.stringify(normalizedFiles) !== JSON.stringify(mergedFiles)) {
+                UpdateFiles({
+                    workspaceId: id,
+                    userId,
+                    files: normalizedFiles
+                });
             }
+        } catch (e) {
+            // ignore normalization sync errors
         }
         setFiles(normalizedFiles);
         setActiveEditorFile(pickActiveEditorFile(normalizedFiles));
@@ -707,7 +703,7 @@ export default Navbar;`
         } catch (error) {
             console.error('GenerateAiCode Error:', error);
             const isTimeout = error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '');
-            const errorMsg = error.response?.data?.error || error.message;
+            const errorMsg = error?.response?.data?.error || error?.message || 'Unknown error occurred';
             alert(isTimeout
                 ? "Generation timed out. Please try again. If it keeps timing out, shorten the request or try again in a minute."
                 : "Error generating code: " + errorMsg);

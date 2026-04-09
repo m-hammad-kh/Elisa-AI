@@ -1,9 +1,9 @@
 "use client"
 import React from 'react';
 import { 
-    Monitor, MessageSquare, Code, Smartphone, Download, 
-    CheckCircle, Zap, Shield, Sparkles, MousePointer2, 
-    RotateCcw, History, Layout, Globe, Palette, Rocket
+    Monitor, MessageSquare, Code, Download, 
+    Zap, Shield, Sparkles, MousePointer2, 
+    RotateCcw, History, Layout, Globe
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 

@@ -1,7 +1,7 @@
-﻿"use client"
+"use client"
 import React, { useRef } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
-import { Sparkles, Code, Zap, Smartphone, Layout, Globe, Palette, Shield, Rocket, Heart, Cloud } from 'lucide-react';
+import { Globe, Palette, Shield, Rocket, Heart, Cloud } from 'lucide-react';
 
 const extraFeatures = [
     { icon: <Globe className="w-10 h-10" />, title: "Global Deployment", desc: "Launch your site to a global CDN with one click. Fast, secure, and reliable." },

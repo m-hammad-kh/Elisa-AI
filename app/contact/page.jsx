@@ -1,6 +1,6 @@
 "use client"
 import React, { useState } from 'react';
-import { Mail, MessageSquare, User, Send, ArrowRight, Sparkles, MapPin, Phone } from 'lucide-react';
+import { Mail, Send, Sparkles, MapPin, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 

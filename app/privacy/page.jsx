@@ -1,6 +1,6 @@
 "use client"
 import React from 'react';
-import { Shield, Lock, Eye, FileText, ArrowLeft } from 'lucide-react';
+import { Shield, Eye, FileText, ArrowLeft } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 
