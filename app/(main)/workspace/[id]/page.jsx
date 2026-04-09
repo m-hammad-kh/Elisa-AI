@@ -24,7 +24,7 @@ const Workspace = () => {
     }
 
     return (
-        <div className="h-[calc(100vh-56px)] bg-background text-foreground relative overflow-hidden flex flex-col">
+        <div className="h-full bg-background text-foreground relative overflow-hidden flex flex-col">
             
             {/* Background Glow */}
             <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-primary/5 blur-[120px] rounded-full pointer-events-none -translate-y-1/2 translate-x-1/2" />

@@ -39,7 +39,7 @@ function Provider({children}) {
   }, [isWorkspace]);
 
   return (
-    <div>
+    <div className={isWorkspace ? "h-screen flex flex-col overflow-hidden" : ""}>
       <ClerkProvider publishableKey={clerkKey} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignInUrl="/" afterSignUpUrl="/">
         <MessagesContext.Provider value={{messages,setMessages, selectedElement, setSelectedElement, chatOnly, setChatOnly}}>
           <NextThemesProvider
@@ -49,9 +49,11 @@ function Provider({children}) {
               disableTransitionOnChange
               >
                 {!isWorkspacePreview && <Header />}
-                <PageTransition>
-                  {children}
-                </PageTransition>
+                <div className={isWorkspace ? "flex-1 overflow-hidden" : ""}>
+                  <PageTransition>
+                    {children}
+                  </PageTransition>
+                </div>
                 {!isWorkspace && !isPromptPage && <Footer />}
           </NextThemesProvider>
         </MessagesContext.Provider>
