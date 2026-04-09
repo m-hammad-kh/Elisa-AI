@@ -1,4 +1,4 @@
-﻿"use client"
+﻿﻿"use client"
 import React, { useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
     SandpackProvider,
@@ -1529,6 +1529,7 @@ if (typeof window !== 'undefined') {
                         initMode: 'immediate',
                         autorun: true,
                     }}
+                    style={{ height: '100%' }}
                 >
                     <SandpackSync />
                     <div className="h-full flex flex-col relative workspace-sandpack">
@@ -1562,7 +1563,7 @@ if (typeof window !== 'undefined') {
                         )}
                         <div className="flex-1 overflow-hidden relative">
                             <div className={`absolute inset-0 transition-opacity duration-200 ${activeTab === 'code' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
-                                <SandpackLayout className="flex-1 !border-none !rounded-none h-full">
+                                <SandpackLayout className="flex-1 !border-none !rounded-none h-full" style={{ height: '100%' }}>
                                     <SandpackFileExplorer style={{ height: '100%' }} />
                                     <SandpackCodeEditor 
                                         style={{ height: '100%' }}

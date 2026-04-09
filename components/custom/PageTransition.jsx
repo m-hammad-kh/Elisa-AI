@@ -41,9 +41,9 @@ const PageTransition = ({ children }) => {
     }, [isTransitioning, pathname, children]);
 
     return (
-        <div className="relative min-h-screen bg-background">
+        <div className={`relative h-full ${!pathname?.includes('/workspace') ? 'min-h-screen' : ''} bg-background`}>
             {/* The actual page content - Hidden during transition */}
-            <div className={`transition-all duration-700 ${shouldShowContent ? 'opacity-100 scale-100 blur-0' : 'opacity-0 scale-95 blur-md'}`}>
+            <div className={`h-full transition-all duration-700 ${shouldShowContent ? 'opacity-100 scale-100 blur-0' : 'opacity-0 scale-95 blur-md'}`}>
                 {displayChildren}
             </div>
 
