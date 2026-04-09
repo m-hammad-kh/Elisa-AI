@@ -1,0 +1,386 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+    --primary: 0 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 15%;
+    --muted: 0 0% 92%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 85%;
+    --input: 0 0% 85%;
+    --ring: 0 100% 50%;
+    --radius: 1.5rem;
+  }
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 2%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 2%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 0 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 0 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 0 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+html.workspace-no-scroll,
+body.workspace-no-scroll {
+  overflow: hidden;
+}
+}
+
+/* Custom scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--primary) / 0.5) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary) / 0.55);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.7);
+}
+
+/* Keep Sandpack editor scrollbars neutral (avoid brand red) */
+.workspace-sandpack,
+.workspace-sandpack *,
+.workspace-sandpack .sp-code-editor,
+.workspace-sandpack .sp-code-editor *,
+.workspace-sandpack .sp-file-explorer,
+.workspace-sandpack .sp-file-explorer * {
+  scrollbar-color: hsl(var(--border) / 0.95) transparent;
+}
+
+.workspace-sandpack *::-webkit-scrollbar,
+.workspace-sandpack .sp-code-editor *::-webkit-scrollbar,
+.workspace-sandpack .sp-file-explorer *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.workspace-sandpack *::-webkit-scrollbar-track,
+.workspace-sandpack .sp-code-editor *::-webkit-scrollbar-track,
+.workspace-sandpack .sp-file-explorer *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.workspace-sandpack *::-webkit-scrollbar-thumb,
+.workspace-sandpack .sp-code-editor *::-webkit-scrollbar-thumb,
+.workspace-sandpack .sp-file-explorer *::-webkit-scrollbar-thumb {
+  background: hsl(var(--border) / 0.95);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.workspace-sandpack *::-webkit-scrollbar-thumb:hover,
+.workspace-sandpack .sp-code-editor *::-webkit-scrollbar-thumb:hover,
+.workspace-sandpack .sp-file-explorer *::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--border) / 1);
+}
+
+/* Force Sandpack preview iframe to fill container */
+.sp-preview-iframe {
+  height: 100% !important;
+  width: 100% !important;
+  min-height: 100% !important;
+  flex: 1 !important;
+}
+
+.sp-preview-container {
+  height: 100% !important;
+  width: 100% !important;
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Ensure any internal Sandpack wrappers also take full height */
+.sp-wrapper, .sp-stack {
+  height: 100% !important;
+  width: 100% !important;
+  flex: 1 !important;
+}
+
+.grid-bg {
+  background-image: 
+    linear-gradient(to right, rgba(128, 128, 128, 0.15) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(128, 128, 128, 0.15) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+.container {
+  max-width: 90% !important;
+  width: 90% !important;
+}
+
+.dark .grid-bg {
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+}
+
+.hero-noise {
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.12) 1px, transparent 0);
+  background-size: 18px 18px;
+  mix-blend-mode: soft-light;
+}
+
+/* Hero falling shards */
+.falling-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.falling-shard {
+  position: absolute;
+  top: -12%;
+  pointer-events: none;
+  user-select: none;
+  animation-name: shardFall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.code-chunk {
+  font-weight: 700;
+  text-shadow: 0 0 10px currentColor;
+  filter: blur(0.4px);
+  white-space: nowrap;
+  color: hsl(var(--primary) / 0.6);
+}
+
+.dark .code-chunk {
+  text-shadow: 0 0 15px currentColor;
+  filter: blur(0.3px);
+  color: hsl(var(--primary) / 0.45);
+}
+
+@keyframes shardFall {
+  0% {
+    transform: translateY(-120%) translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(60vh) translateX(20px) rotate(180deg);
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(140vh) translateX(-20px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+/* Hero code loop */
+.code-marquee {
+  position: relative;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent, black 8%, black 92%, transparent);
+}
+
+.code-track {
+  display: flex;
+  flex-direction: column;
+  /* Remove gap for perfect infinite loop calculation */
+  gap: 0;
+  animation: codeScroll 22s linear infinite;
+  will-change: transform;
+}
+
+.code-line {
+  white-space: nowrap;
+  /* Add margin here instead of gap on track */
+  padding-bottom: 6px;
+  line-height: 1.5;
+}
+
+.code-caret {
+  display: inline-block;
+  width: 6px;
+  height: 16px;
+  margin-left: 6px;
+  background: rgba(255, 0, 0, 0.8);
+  box-shadow: 0 0 8px rgba(255, 0, 0, 0.6);
+  animation: caretBlink 1s steps(2, start) infinite;
+  vertical-align: -2px;
+}
+
+@keyframes codeScroll {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+@keyframes caretBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Testimonials marquee */
+.marquee-row {
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+}
+
+.marquee-track {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  width: max-content;
+  animation: marquee-left 48s linear infinite;
+}
+
+.marquee-row:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+.marquee-right {
+  animation-name: marquee-right;
+}
+
+/* Glassmorphism & Liquid Glass Utilities */
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dark .glass {
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-morphism {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.liquid-glass {
+  position: relative;
+  overflow: hidden;
+}
+
+.liquid-glass::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 70%);
+  animation: liquidRotate 10s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes liquidRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.glow-primary {
+  box-shadow: 0 0 20px rgba(255, 0, 0, 0.15), 0 0 40px rgba(255, 0, 0, 0.1);
+}
+
+.text-glow {
+  text-shadow: 0 0 10px currentColor;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(5deg); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes marquee-left {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes marquee-right {
+  0% {
+    transform: translateX(-50%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
