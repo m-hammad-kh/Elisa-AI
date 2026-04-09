@@ -420,7 +420,6 @@ export async function POST(req) {
                     const fullUrl = match[0];
                     const query = match[1];
                     const orientation = match[3] || 'landscape';
-                    const cacheKey = `${query}_${orientation}`;
 
                     let imageUrl = null;
                     let attempts = 0;
