@@ -1,5 +1,5 @@
-﻿﻿"use client"
-import React, { useContext, useState, useEffect, useRef, useCallback } from 'react';
+"use client"
+import React, { useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     SandpackProvider,
     SandpackLayout,
@@ -125,6 +125,155 @@ const fixUnsafeSandboxCode = (input) => {
     return code;
 };
 
+const SANDBOX_EXTERNAL_RESOURCES = [
+    'https://cdn.tailwindcss.com',
+    'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css'
+];
+
+const MAX_PROMPT_MESSAGE_CHARS = 22000;
+const MAX_PROMPT_FILES_CHARS = 420000;
+const MAX_IMPORTANT_FILE_CHARS = 18000;
+const MAX_OTHER_FILE_CHARS = 6000;
+
+const truncateForPrompt = (code, limit) => {
+    const text = typeof code === 'string' ? code : '';
+    if (!Number.isFinite(limit) || limit === Infinity) return text;
+    if (text.length <= limit) return text;
+    const head = Math.max(400, Math.floor(limit * 0.6));
+    const tail = Math.max(200, Math.floor(limit * 0.2));
+    const trimmedHead = text.slice(0, Math.min(head, text.length));
+    const trimmedTail = text.slice(Math.max(text.length - tail, 0));
+    const removed = Math.max(text.length - trimmedHead.length - trimmedTail.length, 0);
+    return `${trimmedHead}\n... [truncated ${removed} chars] ...\n${trimmedTail}`;
+};
+
+
+const trimMessagesForPrompt = (messages) => {
+    const list = Array.isArray(messages) ? messages : [];
+    if (list.length <= 8) return list;
+    const kept = [];
+    let size = 0;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+        const msg = list[i];
+        const content = typeof msg?.content === 'string' ? msg.content : '';
+        const nextSize = size + content.length;
+        if (kept.length < 8 || nextSize <= MAX_PROMPT_MESSAGE_CHARS) {
+            kept.unshift(msg);
+            size = nextSize;
+            continue;
+        }
+        break;
+    }
+    return kept;
+};
+
+const compressMessagesForPrompt = (messages) => {
+    const list = Array.isArray(messages) ? messages : [];
+    if (list.length === 0) return list;
+    return list.map((msg, idx) => {
+        const content = typeof msg?.content === 'string' ? msg.content : '';
+        if (!content) return msg;
+        const isRecent = idx >= list.length - 2;
+        const limit = msg.role === 'ai'
+            ? (isRecent ? 2200 : 1200)
+            : (isRecent ? 2600 : 1600);
+        if (content.length <= limit) return msg;
+        return {
+            ...msg,
+            content: `${content.slice(0, limit)}\n... [truncated] ...`
+        };
+    });
+};
+
+const buildPromptFiles = (inputFiles, activeFile) => {
+    const source = inputFiles && typeof inputFiles === 'object' ? inputFiles : {};
+    const totalSize = JSON.stringify(source).length;
+    const useCompression = totalSize > MAX_PROMPT_FILES_CHARS;
+    const important = new Set([
+        '/index.html',
+        '/index.jsx',
+        '/index.js',
+        '/index.tsx',
+        '/App.jsx',
+        '/App.tsx',
+        '/styles.css',
+        '/package.json',
+        '/src/index.jsx',
+        '/src/index.js',
+        '/src/index.tsx',
+        '/src/main.jsx',
+        '/src/main.tsx',
+        '/src/App.jsx',
+        '/src/App.tsx'
+    ]);
+
+    const addVariants = (path) => {
+        if (!path || typeof path !== 'string') return;
+        const clean = path.startsWith('/') ? path : `/${path}`;
+        important.add(clean);
+        if (clean.startsWith('/src/')) {
+            important.add(clean.slice(4));
+        } else {
+            important.add(`/src${clean}`);
+        }
+        if (clean.startsWith('/public/')) {
+            important.add(clean.slice(7));
+        } else if (!clean.startsWith('/public/')) {
+            important.add(`/public${clean}`);
+        }
+    };
+
+    addVariants(activeFile);
+
+    const entries = Object.entries(source).map(([path, content]) => {
+        const rawCode = toSandboxCode(content);
+        const size = rawCode.length;
+        const priority = important.has(path)
+            ? 3
+            : (path.includes('/components/') || path.includes('/pages/'))
+                ? 2
+                : (path.includes('/sections/') || path.includes('/layouts/'))
+                    ? 1
+                    : 0;
+        return { path, rawCode, size, priority };
+    });
+
+    entries.sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        return b.size - a.size;
+    });
+
+    const promptFiles = {};
+    const fileIndex = [];
+    let used = 0;
+
+    entries.forEach((entry) => {
+        const limit = useCompression
+            ? (entry.priority >= 2 ? MAX_IMPORTANT_FILE_CHARS : MAX_OTHER_FILE_CHARS)
+            : Infinity;
+        const trimmed = truncateForPrompt(entry.rawCode, limit);
+        const cost = trimmed.length + entry.path.length + 12;
+        const mustInclude = entry.priority >= 2;
+        if (!useCompression || mustInclude || used + cost <= MAX_PROMPT_FILES_CHARS) {
+            promptFiles[entry.path] = { code: trimmed };
+            used += cost;
+        } else {
+            fileIndex.push({ path: entry.path, size: entry.size });
+        }
+    });
+
+    if (fileIndex.length > 0) {
+        fileIndex.sort((a, b) => b.size - a.size);
+    }
+
+    return {
+        files: promptFiles,
+        fileIndex,
+        useCompression,
+        totalSize
+    };
+};
+
 const formatSelectedElement = (element) => {
     if (!element || typeof element !== 'object') return '';
     const tag = element.tagName ? String(element.tagName).toLowerCase() : 'element';
@@ -178,6 +327,15 @@ function CodeView() {
     const skipInitialGenerateRef = useRef(false);
     const hasPersistedFilesRef = useRef(false);
     const [filesLoaded, setFilesLoaded] = useState(false);
+    const lastProcessedIndexRef = useRef(-1);
+
+    useEffect(() => {
+        // Reset per-workspace refs when switching IDs
+        lastProcessedIndexRef.current = -1;
+        skipInitialGenerateRef.current = false;
+        hasPersistedFilesRef.current = false;
+        setSelectedElement(null);
+    }, [id, setSelectedElement]);
 
     useEffect(() => {
         sandpackFilesRef.current = files;
@@ -390,6 +548,7 @@ function CodeView() {
         return null;
     }
 
+
     const preprocessFiles = useCallback((files) => {
         const processed = {};
         Object.entries(files || {}).forEach(([path, content]) => {
@@ -492,7 +651,7 @@ function CodeView() {
             'Footer',
             `const Footer = () => (
   <footer className="bg-gray-100 p-8 text-center text-gray-600 border-t mt-12">
-    © ${new Date().getFullYear()} Project. All rights reserved.
+    ï¿½ ${new Date().getFullYear()} Project. All rights reserved.
   </footer>
 );
 
@@ -526,41 +685,46 @@ export default Navbar;`
 
     const GetFiles = useCallback(async () => {
         if (!userId) return;
-        const result = await convex.query(api.workspace.GetWorkspace, {
-            workspaceId: id,
-            userId
-        });
-        if (!result) {
-            setFilesLoaded(true);
-            return;
-        }
-        const persistedFiles = result?.fileData && Object.keys(result.fileData).length > 0;
-        hasPersistedFilesRef.current = Boolean(persistedFiles);
-        if (persistedFiles) {
-            skipInitialGenerateRef.current = true;
-        }
-        const processedFiles = preprocessFiles(result?.fileData || {});
-        const defaultFiles = preprocessFiles(Lookup.DEFAULT_FILE);
-        const mergedFiles = { ...defaultFiles, ...processedFiles };
-        const normalizedFiles = normalizeGeneratedFiles(mergedFiles);
         try {
-            if (JSON.stringify(normalizedFiles) !== JSON.stringify(mergedFiles)) {
-                UpdateFiles({
-                    workspaceId: id,
-                    userId,
-                    files: normalizedFiles
-                });
+            const result = await convex.query(api.workspace.GetWorkspace, {
+                workspaceId: id,
+                userId
+            });
+            if (!result) {
+                setFilesLoaded(true);
+                return;
             }
-        } catch (e) {
-            // ignore normalization sync errors
+            const persistedFiles = result?.fileData && Object.keys(result.fileData).length > 0;
+            hasPersistedFilesRef.current = Boolean(persistedFiles);
+            if (persistedFiles) {
+                skipInitialGenerateRef.current = true;
+            }
+            const processedFiles = preprocessFiles(result?.fileData || {});
+            const defaultFiles = preprocessFiles(Lookup.DEFAULT_FILE);
+            const mergedFiles = { ...defaultFiles, ...processedFiles };
+            const normalizedFiles = normalizeGeneratedFiles(mergedFiles);
+            try {
+                if (JSON.stringify(normalizedFiles) !== JSON.stringify(mergedFiles)) {
+                    UpdateFiles({
+                        workspaceId: id,
+                        userId,
+                        files: normalizedFiles
+                    });
+                }
+            } catch (e) {
+                // ignore normalization sync errors
+            }
+            setFiles(normalizedFiles);
+            setActiveEditorFile(pickActiveEditorFile(normalizedFiles));
+            // Reset history on load
+            setHistory([normalizedFiles]);
+            setHistoryIndex(0);
+            setSandpackKey(prev => prev + 1);
+            setFilesLoaded(true);
+        } catch (error) {
+            console.error('Error loading workspace files:', error);
+            setFilesLoaded(true);
         }
-        setFiles(normalizedFiles);
-        setActiveEditorFile(pickActiveEditorFile(normalizedFiles));
-        // Reset history on load
-        setHistory([normalizedFiles]);
-        setHistoryIndex(0);
-        setSandpackKey(prev => prev + 1);
-        setFilesLoaded(true);
     }, [id, convex, preprocessFiles, pickActiveEditorFile, userId, normalizeGeneratedFiles, UpdateFiles]);
 
     useEffect(() => {
@@ -578,7 +742,7 @@ export default Navbar;`
 
         // Clean messages to avoid sending redundant huge code blocks
         // BUT keep enough context for updates
-          const cleanMessages = messages
+        const cleanMessages = messages
               .filter(msg => msg.role !== 'command')
               .map(msg => {
                   const contentToUse = msg.technicalContent || msg.content;
@@ -614,6 +778,8 @@ export default Navbar;`
                       content: contentToUse
                   };
               });
+        const compressedMessages = compressMessagesForPrompt(cleanMessages);
+        const trimmedMessages = trimMessagesForPrompt(compressedMessages);
 
         // CRITICAL: Use the most up-to-date files from Sandpack internal state if available
         // This ensures AI updates include manual edits even if they haven't synced to DB yet
@@ -622,27 +788,19 @@ export default Navbar;`
             : files;
         
         let currentFilesToSync = preprocessFiles(currentFiles);
-        let cleanFiles = { ...currentFilesToSync };
-        const totalSize = JSON.stringify(cleanFiles).length;
-        
-        // Gemini 2.0 Flash has a 1M token context window. 
-        if (totalSize > 400000) { 
-            const truncatedFiles = {};
-            Object.entries(cleanFiles).forEach(([path, content]) => {
-                const code = typeof content === 'string' ? content : (content?.code || "");
-                if (code.length > 5000) {
-                    truncatedFiles[path] = { 
-                        code: code.substring(0, 5000) + "\n... [Remaining lines truncated for context length] ...",
-                        is_truncated: true 
-                    };
-                } else {
-                    truncatedFiles[path] = typeof content === 'string' ? { code: content } : content;
-                }
-            });
-            cleanFiles = truncatedFiles;
-        }
+        const promptFilesResult = buildPromptFiles(currentFilesToSync, activeEditorFile);
+        const cleanFiles = { ...promptFilesResult.files };
+        const fileIndex = promptFilesResult.fileIndex || [];
 
-        let PROMPT = JSON.stringify(cleanMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(cleanFiles) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        const promptPayload = {
+            files: cleanFiles,
+            fileIndex
+        };
+
+        let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        if (promptFilesResult.useCompression) {
+            PROMPT += "\n\n NOTE: Some files were truncated or omitted from content. Use fileIndex for awareness and avoid rewriting unrelated files.";
+        }
         const latestTargetedMessage = [...messages].reverse().find((msg) => msg.role === 'user' && msg.selectedElement);
         const targetedHint = latestTargetedMessage?.selectedElement
             ? formatSelectedElement(latestTargetedMessage.selectedElement)
@@ -663,7 +821,7 @@ export default Navbar;`
                 prompt: PROMPT,
                 existingFiles: cleanFiles
             }, {
-                timeout: 120000
+                timeout: 80000
             });
 
             if (result.data?.error) {
@@ -705,15 +863,12 @@ export default Navbar;`
             const isTimeout = error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '');
             const errorMsg = error?.response?.data?.error || error?.message || 'Unknown error occurred';
             alert(isTimeout
-                ? "Generation timed out. Please try again. If it keeps timing out, shorten the request or try again in a minute."
+                ? "Generation timed out (~80s max). Please try again. If it keeps timing out, shorten the request or try again in a minute."
                 : "Error generating code: " + errorMsg);
         } finally {
             setLoading(false);
         }
-    }, [id, messages, files, historyIndex, preprocessFiles, pickActiveEditorFile, normalizeGeneratedFiles, UpdateFiles, userId]);
-
-    // Keep track of the last processed message to avoid missing or double-processing
-    const lastProcessedIndexRef = useRef(-1);
+    }, [id, messages, files, historyIndex, preprocessFiles, pickActiveEditorFile, normalizeGeneratedFiles, UpdateFiles, userId, activeEditorFile]);
 
     useEffect(() => {
         if (!filesLoaded) return;
@@ -991,7 +1146,7 @@ export default defineConfig({
     };
 
     // Final validation of files object before passing to Sandpack
-    const getValidatedFiles = () => {
+    const validatedFiles = useMemo(() => {
         const validated = {};
         Object.entries(files || {}).forEach(([path, content]) => {
             if (!isValidSandboxPath(path)) return;
@@ -1198,26 +1353,218 @@ if (typeof window !== 'undefined') {
         const entryFile = entryCandidates.find(p => Boolean(validated[p]));
         if (entryFile) {
             const baseIndexCode = toSandboxCode(validated[entryFile]);
+            const importLine = "import './selector-helper.js';";
             validated[entryFile] = {
-                code: `import './selector-helper.js';\n${baseIndexCode}`
+                code: baseIndexCode.includes(importLine) ? baseIndexCode : `${importLine}\n${baseIndexCode}`
             };
         }
 
         return validated;
-    };
+    }, [files]);
+
+    const sandpackConfig = useMemo(() => {
+        const template = 'react';
+        const previewDependencies = { ...(Lookup.DEPENDENCIES || {}) };
+
+        // Dynamically extract dependencies from generated package.json if available
+        const pkgJson = validatedFiles['/package.json'] || validatedFiles['/src/package.json'];
+        if (pkgJson) {
+            try {
+                const parsed = JSON.parse(toSandboxCode(pkgJson));
+                if (parsed.dependencies) {
+                    Object.assign(previewDependencies, parsed.dependencies);
+                }
+            } catch (e) {}
+        }
+
+        delete previewDependencies.vite;
+        delete previewDependencies['@vitejs/plugin-react'];
+        delete previewDependencies['esbuild-wasm'];
+
+        const ensureExternalStylesInHtml = (html) => {
+            const input = typeof html === 'string' ? html : '';
+            if (!input.trim()) return input;
+            let out = input;
+            const needsTailwind = !out.includes('cdn.tailwindcss.com');
+            const needsTypography = !out.includes('@tailwindcss/typography');
+            const needsScript = !out.includes('type="module"') && !out.includes('src="/index.jsx"');
+
+            if (!needsTailwind && !needsTypography && !needsScript) return out;
+
+            const headInjections = [
+                needsTypography
+                    ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
+                    : null,
+                needsTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
+            ].filter(Boolean).join('\n    ');
+
+            if (headInjections) {
+                if (out.match(/<\/head>/i)) {
+                    out = out.replace(/<\/head>/i, `    ${headInjections}\n  </head>`);
+                } else if (out.match(/<head[^>]*>/i)) {
+                    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${headInjections}`);
+                }
+            }
+
+            if (needsScript) {
+                const bodyCloseMatch = out.match(/<\/body>/i);
+                const scriptTag = '    <script type="module" src="/index.jsx"></script>';
+                if (bodyCloseMatch) {
+                    out = out.replace(/<\/body>/i, `${scriptTag}\n  </body>`);
+                } else {
+                    out = out + `\n${scriptTag}`;
+                }
+            }
+            return out;
+        };
+
+        const stripViteModuleScripts = (html) => {
+            const input = typeof html === 'string' ? html : '';
+            return input.replace(/<script[^>]*type=["']module["'][\s\S]*?<\/script>/gi, '');
+        };
+
+        const isViteLike = Boolean(
+            validatedFiles['/index.html'] &&
+            (validatedFiles['/index.jsx'] ||
+                validatedFiles['/index.tsx'] ||
+                validatedFiles['/index.js'] ||
+                validatedFiles['/src/main.jsx'] ||
+                validatedFiles['/src/main.tsx'] ||
+                validatedFiles['/vite.config.js'])
+        );
+
+        let sandpackFiles = validatedFiles;
+        let entry;
+        let activeFile;
+
+        if (isViteLike) {
+            const nextFiles = {};
+            const fallbackHtml = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Website</title>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>`;
+            const rawHtml = toSandboxCode(validatedFiles['/index.html'] || '').trim();
+            nextFiles['/public/index.html'] = { code: ensureExternalStylesInHtml(stripViteModuleScripts(rawHtml || fallbackHtml)) };
+
+            Object.entries(validatedFiles).forEach(([path, content]) => {
+                if (path === '/index.html') return;
+                if (path.startsWith('/public/') || path.startsWith('/src/')) {
+                    nextFiles[path] = content;
+                    return;
+                }
+                nextFiles[`/src${path}`] = content;
+            });
+
+            if (!nextFiles['/src/index.tsx'] && !nextFiles['/src/index.jsx'] && !nextFiles['/src/index.js']) {
+                if (nextFiles['/src/main.tsx']) {
+                    nextFiles['/src/index.tsx'] = { code: `import "./main.tsx";` };
+                } else if (nextFiles['/src/main.jsx']) {
+                    nextFiles['/src/index.jsx'] = { code: `import "./main.jsx";` };
+                }
+            }
+
+            const rewriteEntryCode = (code) => {
+                const input = typeof code === 'string' ? code : '';
+                return input
+                    .replace(/from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'from "./App"')
+                    .replace(/from\s+["']\.\/App["']/g, 'from "./App"')
+                    .replace(/import\s+App\s+from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'import App from "./App"');
+            };
+
+            if (nextFiles['/src/index.tsx']) {
+                nextFiles['/src/index.tsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.tsx'])) };
+            } else if (nextFiles['/src/index.jsx']) {
+                nextFiles['/src/index.jsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.jsx'])) };
+            } else if (nextFiles['/src/index.js']) {
+                nextFiles['/src/index.js'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.js'])) };
+            }
+
+            sandpackFiles = nextFiles;
+            entry = nextFiles['/src/index.tsx']
+                ? '/src/index.tsx'
+                : nextFiles['/src/index.jsx']
+                    ? '/src/index.jsx'
+                    : nextFiles['/src/index.js']
+                        ? '/src/index.js'
+                        : Object.keys(nextFiles)[0] || '/src/index.js';
+        } else {
+            const entryCandidates = [
+                '/index.jsx',
+                '/index.tsx',
+                '/index.js',
+                '/src/main.jsx',
+                '/src/main.tsx',
+                '/src/index.jsx',
+                '/src/index.tsx',
+                '/src/index.js'
+            ];
+            entry = entryCandidates.find((path) => Boolean(validatedFiles[path])) || Object.keys(validatedFiles)[0] || '/index.js';
+        }
+
+        const desiredActive = typeof activeEditorFile === 'string' ? activeEditorFile : '';
+        if (isViteLike) {
+            if (desiredActive === '/index.html') {
+                activeFile = '/public/index.html';
+            } else if (desiredActive.startsWith('/public/') || desiredActive.startsWith('/src/')) {
+                activeFile = desiredActive;
+            } else if (desiredActive.startsWith('/')) {
+                activeFile = `/src${desiredActive}`;
+            } else {
+                activeFile = entry;
+            }
+        } else {
+            activeFile = desiredActive && desiredActive.startsWith('/') ? desiredActive : entry;
+        }
+
+        if (!sandpackFiles[activeFile]) {
+            if (sandpackFiles['/public/index.html']) activeFile = '/public/index.html';
+            else if (sandpackFiles['/index.html']) activeFile = '/index.html';
+            else if (sandpackFiles[entry]) activeFile = entry;
+            else activeFile = Object.keys(sandpackFiles)[0] || entry;
+        }
+
+        return {
+            template,
+            previewDependencies,
+            sandpackFiles,
+            entry,
+            activeFile
+        };
+    }, [validatedFiles, activeEditorFile]);
+
+    const sandpackOptions = useMemo(() => ({
+        externalResources: SANDBOX_EXTERNAL_RESOURCES,
+        activeFile: sandpackConfig.activeFile,
+        bundlerTimeoutSecs: 120,
+        initMode: 'immediate',
+        autorun: true,
+    }), [sandpackConfig.activeFile]);
+
+    const sandpackCustomSetup = useMemo(() => ({
+        dependencies: sandpackConfig.previewDependencies,
+        entry: sandpackConfig.entry
+    }), [sandpackConfig.previewDependencies, sandpackConfig.entry]);
 
     const onUndo = () => {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [...(Array.isArray(prev) ? prev : []), {
             role: 'command',
             content: 'UNDO'
         }]);
     }
     const onRedo = () => {
-        setMessages(prev => [...prev, {
+        setMessages(prev => [...(Array.isArray(prev) ? prev : []), {
             role: 'command',
             content: 'REDO'
         }]);
     }
+
 
     return (
         <div className="relative h-full flex flex-col border border-border/60 bg-background overflow-hidden">
@@ -1339,196 +1686,13 @@ if (typeof window !== 'undefined') {
 
             {/* Main Content */}
             <div className={`flex-1 overflow-hidden relative bg-background`}>
-                {(() => {
-                    const validatedFiles = getValidatedFiles();
-                    const template = 'react';
-                    const previewDependencies = { ...(Lookup.DEPENDENCIES || {}) };
-                    
-                    // Dynamically extract dependencies from generated package.json if available
-                    const pkgJson = validatedFiles['/package.json'] || validatedFiles['/src/package.json'];
-                    if (pkgJson) {
-                        try {
-                            const parsed = JSON.parse(toSandboxCode(pkgJson));
-                            if (parsed.dependencies) {
-                                Object.assign(previewDependencies, parsed.dependencies);
-                            }
-                        } catch (e) {}
-                    }
-
-                    delete previewDependencies.vite;
-                    delete previewDependencies['@vitejs/plugin-react'];
-                    delete previewDependencies['esbuild-wasm'];
-
-                    const ensureExternalStylesInHtml = (html) => {
-                        const input = typeof html === 'string' ? html : '';
-                        if (!input.trim()) return input;
-                        let out = input;
-                        const needsTailwind = !out.includes('cdn.tailwindcss.com');
-                        const needsTypography = !out.includes('@tailwindcss/typography');
-                        const needsScript = !out.includes('type="module"') && !out.includes('src="/index.jsx"');
-
-                        if (!needsTailwind && !needsTypography && !needsScript) return out;
-
-                        const headInjections = [
-                            needsTypography
-                                ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
-                                : null,
-                            needsTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
-                        ].filter(Boolean).join('\n    ');
-
-                        if (headInjections) {
-                            if (out.match(/<\/head>/i)) {
-                                out = out.replace(/<\/head>/i, `    ${headInjections}\n  </head>`);
-                            } else if (out.match(/<head[^>]*>/i)) {
-                                out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${headInjections}`);
-                            }
-                        }
-
-                        if (needsScript) {
-                            const bodyCloseMatch = out.match(/<\/body>/i);
-                            const scriptTag = '    <script type="module" src="/index.jsx"></script>';
-                            if (bodyCloseMatch) {
-                                out = out.replace(/<\/body>/i, `${scriptTag}\n  </body>`);
-                            } else {
-                                out = out + `\n${scriptTag}`;
-                            }
-                        }
-                        return out;
-                    };
-
-                    const stripViteModuleScripts = (html) => {
-                        const input = typeof html === 'string' ? html : '';
-                        return input.replace(/<script[^>]*type=["']module["'][\s\S]*?<\/script>/gi, '');
-                    };
-
-                    const isViteLike = Boolean(
-                        validatedFiles['/index.html'] &&
-                        (validatedFiles['/index.jsx'] ||
-                            validatedFiles['/index.tsx'] ||
-                            validatedFiles['/index.js'] ||
-                            validatedFiles['/src/main.jsx'] ||
-                            validatedFiles['/src/main.tsx'] ||
-                            validatedFiles['/vite.config.js'])
-                    );
-
-                    let sandpackFiles = validatedFiles;
-                    let entry;
-                    let activeFile;
-
-                    if (isViteLike) {
-                        const nextFiles = {};
-                        const fallbackHtml = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Website</title>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`;
-                        const rawHtml = toSandboxCode(validatedFiles['/index.html'] || '').trim();
-                        nextFiles['/public/index.html'] = { code: ensureExternalStylesInHtml(stripViteModuleScripts(rawHtml || fallbackHtml)) };
-
-                        Object.entries(validatedFiles).forEach(([path, content]) => {
-                            if (path === '/index.html') return;
-                            if (path.startsWith('/public/') || path.startsWith('/src/')) {
-                                nextFiles[path] = content;
-                                return;
-                            }
-                            nextFiles[`/src${path}`] = content;
-                        });
-
-                        if (!nextFiles['/src/index.tsx'] && !nextFiles['/src/index.jsx'] && !nextFiles['/src/index.js']) {
-                            if (nextFiles['/src/main.tsx']) {
-                                nextFiles['/src/index.tsx'] = { code: `import "./main.tsx";` };
-                            } else if (nextFiles['/src/main.jsx']) {
-                                nextFiles['/src/index.jsx'] = { code: `import "./main.jsx";` };
-                            }
-                        }
-
-                        const rewriteEntryCode = (code) => {
-                            const input = typeof code === 'string' ? code : '';
-                            return input
-                                .replace(/from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'from "./App"')
-                                .replace(/from\s+["']\.\/App["']/g, 'from "./App"')
-                                .replace(/import\s+App\s+from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'import App from "./App"');
-                        };
-
-                        if (nextFiles['/src/index.tsx']) {
-                            nextFiles['/src/index.tsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.tsx'])) };
-                        } else if (nextFiles['/src/index.jsx']) {
-                            nextFiles['/src/index.jsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.jsx'])) };
-                        } else if (nextFiles['/src/index.js']) {
-                            nextFiles['/src/index.js'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.js'])) };
-                        }
-
-                        sandpackFiles = nextFiles;
-                        entry = nextFiles['/src/index.tsx']
-                            ? '/src/index.tsx'
-                            : nextFiles['/src/index.jsx']
-                              ? '/src/index.jsx'
-                              : nextFiles['/src/index.js']
-                                ? '/src/index.js'
-                                : Object.keys(nextFiles)[0] || '/src/index.js';
-                    } else {
-                        const entryCandidates = [
-                            '/index.jsx',
-                            '/index.tsx',
-                            '/index.js',
-                            '/src/main.jsx',
-                            '/src/main.tsx',
-                            '/src/index.jsx',
-                            '/src/index.tsx',
-                            '/src/index.js'
-                        ];
-                        entry = entryCandidates.find((path) => Boolean(validatedFiles[path])) || Object.keys(validatedFiles)[0] || '/index.js';
-                    }
-
-                    const desiredActive = typeof activeEditorFile === 'string' ? activeEditorFile : '';
-                    if (isViteLike) {
-                        if (desiredActive === '/index.html') {
-                            activeFile = '/public/index.html';
-                        } else if (desiredActive.startsWith('/public/') || desiredActive.startsWith('/src/')) {
-                            activeFile = desiredActive;
-                        } else if (desiredActive.startsWith('/')) {
-                            activeFile = `/src${desiredActive}`;
-                        } else {
-                            activeFile = entry;
-                        }
-                    } else {
-                        activeFile = desiredActive && desiredActive.startsWith('/') ? desiredActive : entry;
-                    }
-
-                    if (!sandpackFiles[activeFile]) {
-                        if (sandpackFiles['/public/index.html']) activeFile = '/public/index.html';
-                        else if (sandpackFiles['/index.html']) activeFile = '/index.html';
-                        else if (sandpackFiles[entry]) activeFile = entry;
-                        else activeFile = Object.keys(sandpackFiles)[0] || entry;
-                    }
-                    return (
                 <SandpackProvider 
                     key={sandpackKey}
-                    files={sandpackFiles}
-                    template={template} 
+                    files={sandpackConfig.sandpackFiles}
+                    template={sandpackConfig.template}
                     theme={editorTheme}
-                    customSetup={{
-                        dependencies: {
-                            ...previewDependencies
-                        },
-                        entry
-                    }}
-                    options={{
-                        externalResources: [
-                            'https://cdn.tailwindcss.com',
-                            'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css'
-                        ],
-                        activeFile,
-                        bundlerTimeoutSecs: 120,
-                        initMode: 'immediate',
-                        autorun: true,
-                    }}
+                    customSetup={sandpackCustomSetup}
+                    options={sandpackOptions}
                     style={{ height: '100%' }}
                 >
                     <SandpackSync />
@@ -1599,8 +1763,6 @@ if (typeof window !== 'undefined') {
                         </div>
                     </div>
                 </SandpackProvider>
-                    );
-                })()}
 
                 {loading && (
                     <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center">
@@ -1622,7 +1784,5 @@ if (typeof window !== 'undefined') {
 }
 
 export default CodeView;
-
-
 
 

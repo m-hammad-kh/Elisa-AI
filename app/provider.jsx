@@ -9,7 +9,7 @@ import { ClerkProvider } from "@clerk/clerk-react";
 import PageTransition from '@/components/custom/PageTransition';
 
 function Provider({children}) {
-  const [messages,setMessages]=useState();
+  const [messages,setMessages]=useState([]);
   const [selectedElement, setSelectedElement] = useState(null);
   const [chatOnly, setChatOnly] = useState(false);
   const pathname = usePathname();

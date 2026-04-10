@@ -29,6 +29,9 @@ const Prompt = {
     - **Beautiful Aesthetics:** Always deliver a visually stunning design using gradients, glow, glassmorphism, and layered backgrounds where appropriate. The result must feel premium and polished.
     - **Ultra-Modern Aesthetics:** Use Glassmorphism, Mesh Gradients, and Bento Box layouts.
     - **Color & Buttons:** Use vibrant, multi-colored buttons with gradients and hover effects to make the UI "pop."
+    - **Color Contrast (CRITICAL):** Never place light text on a light background or dark text on a dark background. If a section uses \`bg-white\` or other light backgrounds, text must be dark (e.g., \`text-slate-900\`, \`text-gray-900\`). If text is white (\`text-white\`), the background must be clearly dark (e.g., \`bg-slate-900\`, \`bg-black/90\`). Avoid white-on-white at all costs.
+    - **Global Theme (CRITICAL):** Define a clear palette (primary, secondary, accent, neutral) and apply it consistently across sections. Set a visible base background on the page and a default text color to guarantee readability.
+    - **Navbar Visibility (CRITICAL):** The Navbar must be visually distinct with a visible background (solid or glass), border/shadow, and clear separation from content. Do NOT render nav text floating on a plain white background.
     - **Animations:** Implement scroll-triggered reveals using Framer Motion and smooth transitions.
     - **Advanced Components:** Include a sticky glassmorphic Navbar, a multi-column Footer, and interactive sections.
 

@@ -23,6 +23,13 @@ function ChatView() {
     const { user, isLoaded } = useUser();
     const userId = user?.id;
 
+    // Reset chat state when switching workspaces
+    useEffect(() => {
+        setMessages([]);
+        setSelectedElement(null);
+        setChatOnly(false);
+    }, [id, setMessages, setSelectedElement, setChatOnly]);
+
     // Auto-scroll to bottom
     useEffect(() => {
         if (scrollRef.current) {
@@ -35,19 +42,27 @@ function ChatView() {
 
     const GetWorkSpaceData = useCallback(async () => {
         if (!userId) return;
-        const result = await convex.query(api.workspace.GetWorkspace, {
-            workspaceId: id,
-            userId
-        });
-        if (!result) return;
-        const hydratedMessages = Array.isArray(result?.messages)
-            ? result.messages.map((msg) => ({ ...msg, fromDb: true }))
-            : result?.messages;
-        setMessages(hydratedMessages);
-        
-        // If it's a new workspace (only 1 user message), reset to creation mode
-        if (result?.messages?.length === 1 && result?.messages[0].role === 'user') {
-            setChatOnly(false);
+        try {
+            const result = await convex.query(api.workspace.GetWorkspace, {
+                workspaceId: id,
+                userId
+            });
+            if (!result) {
+                setMessages([]);
+                return;
+            }
+            const hydratedMessages = Array.isArray(result?.messages)
+                ? result.messages.map((msg) => ({ ...msg, fromDb: true }))
+                : [];
+            setMessages(hydratedMessages);
+            
+            // If it's a new workspace (only 1 user message), reset to creation mode
+            if (result?.messages?.length === 1 && result?.messages[0].role === 'user') {
+                setChatOnly(false);
+            }
+        } catch (error) {
+            console.error('Error loading workspace messages:', error);
+            setMessages([]);
         }
     }, [id, convex, setMessages, setChatOnly, userId]);
 
@@ -57,10 +72,11 @@ function ChatView() {
 
     const GetAiResponse = useCallback(async () => {
         setLoading(true);
+        const safeMessages = Array.isArray(messages) ? messages : [];
         // Use a different prompt if in Chat Only mode to avoid JSON generation
         const PROMPT = chatOnly 
-            ? JSON.stringify(messages) + "\n\n You are in 'Chat Only' mode. Do NOT generate any code. Just talk to the user naturally and concisely."
-            : JSON.stringify(messages) + Prompt.CHAT_PROMPT;
+            ? JSON.stringify(safeMessages) + "\n\n You are in 'Chat Only' mode. Do NOT generate any code. Just talk to the user naturally and concisely."
+            : JSON.stringify(safeMessages) + Prompt.CHAT_PROMPT;
             
         try {
             const result = await axios.post('/api/ai-chat', {
@@ -85,7 +101,8 @@ function ChatView() {
             }
             
             setMessages(prev => {
-                const updated = [...prev, aiResp];
+                const base = Array.isArray(prev) ? prev : [];
+                const updated = [...base, aiResp];
                 
                 // Update database in the background
                 if (userId) {
@@ -106,8 +123,8 @@ function ChatView() {
     }, [id, messages, chatOnly, setMessages, UpdateMessages, userId]);
 
     useEffect(() => {
-        if (messages?.length > 0) {
-            const role = messages[messages?.length - 1].role;
+        if (Array.isArray(messages) && messages.length > 0) {
+            const role = messages[messages.length - 1].role;
             if (role === 'user') {
                 GetAiResponse();
             }
@@ -115,7 +132,8 @@ function ChatView() {
     }, [messages, GetAiResponse])
 
     const onGenerate = async (input) => {
-        setMessages(prev => [...prev, {
+        if (!input || !input.trim() || loading) return;
+        setMessages(prev => [...(Array.isArray(prev) ? prev : []), {
             role: 'user',
             content: input,
             selectedElement: selectedElement

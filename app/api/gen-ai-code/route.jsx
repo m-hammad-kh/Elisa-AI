@@ -137,15 +137,6 @@ const tryParseJson = (value) => {
     }
 };
 
-const isLikelyTruncatedJson = (value) => {
-    const text = typeof value === 'string' ? value : '';
-    if (text.length < 5000) return false;
-    const openBraces = (text.match(/\{/g) || []).length;
-    const closeBraces = (text.match(/\}/g) || []).length;
-    if (closeBraces < openBraces) return true;
-    return text.length > 25000;
-};
-
 const buildFallbackPackageJson = (projectTitle, dependencies) => {
     const safeName = typeof projectTitle === 'string' && projectTitle.trim()
         ? projectTitle.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '')
@@ -214,6 +205,8 @@ const buildReadme = (projectTitle) => {
     ].join('\n');
 };
 
+
+
 const withTimeout = async (promise, ms, label) => {
     let timer;
     const timeoutPromise = new Promise((_, reject) => {
@@ -228,106 +221,11 @@ const withTimeout = async (promise, ms, label) => {
     }
 };
 
-const AI_TIMEOUT_MS = 90000;
-
-const generateChunkedProject = async (prompt, model) => {
-    const promptTail = typeof prompt === 'string' ? prompt.slice(-15000) : '';
-    const manifestChat = model.startChat({
-        generationConfig: {
-            temperature: 0.4,
-            topP: 0.9,
-            topK: 40,
-            maxOutputTokens: 2048,
-            responseMimeType: 'application/json'
-        },
-        history: []
-    });
-
-    const manifestResp = await withTimeout(
-        manifestChat.sendMessage(
-        [
-            'Return ONLY valid JSON.',
-            'Schema:',
-            '{ "projectTitle": "", "explanation": "", "files": [ { "path": "", "type": "", "description": "" } ], "dependencies": {} }',
-            'Rules:',
-            '- No code in this step.',
-            '- Include /index.html, /index.jsx, /App.jsx, /styles.css at minimum.',
-            '- Keep file count <= 18.',
-            '- All paths start with /. Use .jsx for React components.',
-            '',
-            'User request/context:',
-            promptTail
-        ].join('\n')
-        ),
-        AI_TIMEOUT_MS,
-        'Manifest generation'
-    );
-
-    const manifestText = manifestResp?.response?.text?.() || '';
-    const manifest = tryParseJson(manifestText);
-
-    const fileList = Array.isArray(manifest?.files) ? manifest.files : [];
-    const filePaths = fileList
-        .map((f) => (f && typeof f === 'object' ? f.path : null))
-        .filter((p) => typeof p === 'string' && p.trim().length > 0)
-        .map((p) => toAbsolutePath(p));
-
-    const uniquePaths = Array.from(new Set(filePaths));
-    const dependencies = manifest?.dependencies && typeof manifest.dependencies === 'object' ? manifest.dependencies : {};
-    const projectTitle = typeof manifest?.projectTitle === 'string' ? manifest.projectTitle : 'AI Website';
-    const explanation = typeof manifest?.explanation === 'string' ? manifest.explanation : '';
-
-    const files = {};
-    const fileChatConfig = {
-        temperature: 0.45,
-        topP: 0.9,
-        topK: 40,
-        maxOutputTokens: 8192,
-        responseMimeType: 'text/plain'
-    };
-
-    const allPathsText = uniquePaths.join('\n');
-    for (const targetPath of uniquePaths) {
-        const fileChat = model.startChat({ generationConfig: fileChatConfig, history: [] });
-        const fileResp = await withTimeout(
-            fileChat.sendMessage(
-            [
-                `Generate ONLY the content for this file: ${targetPath}`,
-                'Return raw file content only. No JSON. No markdown fences.',
-                '',
-                `Project title: ${projectTitle}`,
-                explanation ? `Project notes: ${explanation}` : '',
-                '',
-                'Available files (you MUST only import from these):',
-                allPathsText,
-                '',
-                'User request/context (tail):',
-                promptTail
-            ].filter(Boolean).join('\n')
-            ),
-            AI_TIMEOUT_MS,
-            `File generation ${targetPath}`
-        );
-        const code = stripMarkdownCodeFences(fileResp?.response?.text?.() || '');
-        files[targetPath] = { code: fixUnsafeCode(code) };
-    }
-
-    if (!files['/package.json']) {
-        files['/package.json'] = { code: buildFallbackPackageJson(projectTitle, dependencies) };
-    }
-
-    return {
-        projectTitle,
-        explanation,
-        files,
-        generatedFiles: Object.keys(files)
-    };
-};
+const AI_TIMEOUT_MS = 70000;
 
 export async function POST(req) {
     const body = await req.json();
     const prompt = body?.prompt;
-    const existingFiles = body?.existingFiles;
     const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '');
     const effectivePrompt = safePrompt.trim().length > 0
         ? safePrompt
@@ -350,12 +248,7 @@ export async function POST(req) {
         try {
             jsonResponse = tryParseJson(resp);
         } catch (parseError) {
-            if (isLikelyTruncatedJson(resp)) {
-                console.log("JSON likely truncated, falling back to chunked generation...");
-                jsonResponse = await generateChunkedProject(effectivePrompt, model);
-            } else {
-                throw parseError;
-            }
+            throw parseError;
         }
         
         if (!jsonResponse || typeof jsonResponse !== 'object') {
@@ -380,14 +273,6 @@ export async function POST(req) {
 
         jsonResponse.files = normalizedFiles;
         const allFiles = jsonResponse.files;
-        const createdFiles = new Set(Object.keys(allFiles).map(p => p.startsWith('/') ? p : `/${p}`));
-        if (existingFiles && typeof existingFiles === 'object') {
-            Object.keys(existingFiles).forEach(p => {
-                const absolute = p.startsWith('/') ? p : `/${p}`;
-                createdFiles.add(absolute);
-            });
-        }
-        
         const filePaths = Object.keys(allFiles);
         const usedImagesGlobal = new Set();
 
@@ -437,48 +322,6 @@ export async function POST(req) {
                     code = code.split(fullUrl).join(imageUrl);
                 }
             }
-
-            const importRegex = /import\s+?(?:(?:(?:[a-zA-Z0-9_$]+)|(?:\{[a-zA-Z0-9_$,\s]+\}))\s+from\s+)?['"](\.\.?\/[^'"]+|(?:\/[^'"]+))['"]/g;
-            const importMatches = [...code.matchAll(importRegex)];
-            for (const impMatch of importMatches) {
-                let relativePath = impMatch[1];
-                if (!relativePath || typeof relativePath !== 'string') continue;
-                
-                let absolutePath = null;
-                const currentDir = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
-                if (relativePath.startsWith('./')) {
-                    absolutePath = currentDir + (currentDir === '/' ? '' : '/') + relativePath.slice(2);
-                } else if (relativePath.startsWith('../')) {
-                    const parentDir = currentDir.substring(0, currentDir.lastIndexOf('/')) || '/';
-                    absolutePath = parentDir + (parentDir === '/' ? '' : '/') + relativePath.slice(3);
-                } else if (relativePath.startsWith('/')) {
-                    absolutePath = relativePath;
-                }
-
-                if (!absolutePath) continue;
-                absolutePath = absolutePath.replace(/\/\//g, '/');
-                if (!absolutePath.startsWith('/')) absolutePath = '/' + absolutePath;
-
-                const isImageAsset = /\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(absolutePath);
-                if (!absolutePath.includes('.') && !isImageAsset) absolutePath += '.jsx';
-                
-                if (!createdFiles.has(absolutePath)) {
-                    if (isImageAsset) {
-                        allFiles[absolutePath] = { code: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA6ie6hQAAAABJRU5ErkJggg==" };
-                        createdFiles.add(absolutePath);
-                        continue;
-                    }
-                    const componentName = absolutePath.split('/').pop().replace(/\.(jsx?|tsx?)$/i, '');
-                    let stubCode = `import React from 'react';\n\nconst ${componentName} = () => {\n  return <div className="p-4 border border-dashed border-gray-400 rounded text-center">Missing Component: ${componentName}</div>;\n};\n\nexport default ${componentName};`;
-                    if (componentName.toLowerCase().includes('footer')) {
-                        stubCode = `import React from 'react';\n\nconst Footer = () => {\n  return <footer className="bg-gray-100 p-8 text-center text-gray-600 border-t mt-12">© ${new Date().getFullYear()} ${jsonResponse.projectTitle || 'Website'}. All rights reserved.</footer>;\n};\n\nexport default Footer;`;
-                    } else if (componentName.toLowerCase().includes('navbar')) {
-                        stubCode = `import React from 'react';\n\nconst Navbar = () => {\n  return <nav className="p-4 bg-white shadow-sm flex justify-between items-center px-8 border-b"> <div className="font-bold text-xl">${jsonResponse.projectTitle || 'Logo'}</div> <div className="flex gap-4"><span>Home</span><span>About</span><span>Contact</span></div> </nav>;\n};\n\nexport default Navbar;`;
-                    }
-                    allFiles[absolutePath] = { code: fixUnsafeCode(stubCode) };
-                    createdFiles.add(absolutePath);
-                }
-            }
             allFiles[filePath] = { code: fixUnsafeCode(code) };
         }
 
@@ -492,10 +335,12 @@ export async function POST(req) {
         } else {
             jsonResponse.generatedFiles = Object.keys(allFiles);
         }
-        
+
         return NextResponse.json(jsonResponse);
     } catch (e) {
         console.error("Code Generation API Error:", e);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
+
+

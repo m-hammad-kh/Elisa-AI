@@ -1,50 +1,61 @@
 "use client"
-import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useState, useRef } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { usePathname } from 'next/navigation';
 
 const PageTransition = ({ children }) => {
     const pathname = usePathname();
+    const reduceMotion = useReducedMotion();
     const [isTransitioning, setIsTransitioning] = useState(false);
-    const [prevPathname, setPrevPathname] = useState(pathname);
     const [displayChildren, setDisplayChildren] = useState(children);
     const [shouldShowContent, setShouldShowContent] = useState(true);
-
-    // Immediate detection during render to avoid even 1 frame of flicker
-    if (pathname !== prevPathname && !isTransitioning) {
-        setIsTransitioning(true);
-        setShouldShowContent(false); // BLACKOUT IMMEDIATELY
-        setPrevPathname(pathname);
-    }
+    const prevPathnameRef = useRef(pathname);
+    const prevChildrenRef = useRef(children);
+    const isWorkspaceRoute = pathname?.includes('/workspace');
+    const shouldAnimate = !reduceMotion && !isWorkspaceRoute;
 
     useEffect(() => {
-        if (isTransitioning) {
-            // Wait for doors to fully close (0.6s) before swapping content
-            const swapTimer = setTimeout(() => {
-                setDisplayChildren(children);
-            }, 650);
+        const prevPathname = prevPathnameRef.current;
+        if (prevPathname === pathname) return;
 
-            // Wait until doors are fully open (1.4s) before showing new content
-            const endTimer = setTimeout(() => {
-                setIsTransitioning(false);
-                setShouldShowContent(true); // REVEAL CONTENT AFTER ANIMATION
-            }, 1400);
+        prevPathnameRef.current = pathname;
 
-            return () => {
-                clearTimeout(swapTimer);
-                clearTimeout(endTimer);
-            };
-        } else {
-            // Keep children synced when not transitioning
+        if (!shouldAnimate) {
             setDisplayChildren(children);
+            setIsTransitioning(false);
+            setShouldShowContent(true);
+            return;
         }
-    }, [isTransitioning, pathname, children]);
+
+        setIsTransitioning(true);
+        setShouldShowContent(false);
+        setDisplayChildren(prevChildrenRef.current);
+
+        // Faster swap + reveal for better responsiveness
+        const swapTimer = setTimeout(() => {
+            setDisplayChildren(children);
+        }, 280);
+
+        const endTimer = setTimeout(() => {
+            setIsTransitioning(false);
+            setShouldShowContent(true);
+        }, 700);
+
+        return () => {
+            clearTimeout(swapTimer);
+            clearTimeout(endTimer);
+        };
+    }, [pathname, children, shouldAnimate]);
+
+    useEffect(() => {
+        prevChildrenRef.current = children;
+    }, [children]);
 
     return (
         <div className={`relative h-full ${!pathname?.includes('/workspace') ? 'min-h-screen' : ''} bg-background`}>
             {/* The actual page content - Hidden during transition */}
             <div className={`h-full transition-all duration-700 ${shouldShowContent ? 'opacity-100 scale-100 blur-0' : 'opacity-0 scale-95 blur-md'}`}>
-                {displayChildren}
+                {isTransitioning ? displayChildren : children}
             </div>
 
             {/* Heavy Vault Doors */}
@@ -62,7 +73,7 @@ const PageTransition = ({ children }) => {
                             animate={{ x: 0 }}
                             exit={{ x: '-100%' }}
                             transition={{ 
-                                duration: 0.6, 
+                                duration: 0.45, 
                                 ease: [0.85, 0, 0.15, 1],
                             }}
                             className="w-1/2 h-full bg-card/95 border-r-[16px] border-border shadow-[40px_0_100px_rgba(0,0,0,0.3)] dark:shadow-[40px_0_100px_rgba(0,0,0,1)] relative flex items-center justify-end overflow-hidden"
@@ -104,7 +115,7 @@ const PageTransition = ({ children }) => {
                             animate={{ x: 0 }}
                             exit={{ x: '100%' }}
                             transition={{ 
-                                duration: 0.6, 
+                                duration: 0.45, 
                                 ease: [0.85, 0, 0.15, 1],
                             }}
                             className="w-1/2 h-full bg-card/95 border-l-[16px] border-border shadow-[-40px_0_100px_rgba(0,0,0,0.3)] dark:shadow-[-40px_0_100px_rgba(0,0,0,1)] relative flex items-center justify-start overflow-hidden"
@@ -145,8 +156,8 @@ const PageTransition = ({ children }) => {
                             animate={{ scaleX: 1, opacity: 1, x: '-50%', y: '-50%' }}
                             exit={{ scaleX: 0, opacity: 0, x: '-50%', y: '-50%' }}
                             transition={{ 
-                                delay: 0.4,
-                                duration: 0.4,
+                                delay: 0.2,
+                                duration: 0.3,
                                 ease: "circOut"
                             }}
                             className="absolute top-1/2 left-1/2 z-[100000] w-[320px] md:w-[400px] h-[100px] md:h-[120px] bg-card border-y-4 border-primary/60 shadow-[0_0_80px_rgba(255,0,0,0.2)] dark:shadow-[0_0_80px_rgba(255,0,0,0.4)] flex flex-col items-center justify-center gap-4 overflow-hidden"
