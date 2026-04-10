@@ -8,7 +8,7 @@ import CustomCursor from "@/components/custom/CustomCursor";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
-  title: "ELISA AI - WEBSITE BUILDER",
+  title: "Elisa AI - Website Builder",
   description: "Build production-ready applications in minutes with Elisa AI.",
 };
 
