@@ -137,33 +137,6 @@ const tryParseJson = (value) => {
     }
 };
 
-const buildFallbackPackageJson = (projectTitle, dependencies) => {
-    const safeName = typeof projectTitle === 'string' && projectTitle.trim()
-        ? projectTitle.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '')
-        : 'generated-project';
-    const pkg = {
-        name: safeName.slice(0, 100) || 'generated-project',
-        version: '1.0.0',
-        private: true,
-        type: 'module',
-        scripts: {
-            dev: 'vite',
-            build: 'vite build',
-            preview: 'vite preview'
-        },
-        dependencies: {
-            react: '^19.2.4',
-            'react-dom': '^19.2.4',
-            ...(dependencies && typeof dependencies === 'object' ? dependencies : {})
-        },
-        devDependencies: {
-            vite: 'latest',
-            '@vitejs/plugin-react': 'latest'
-        }
-    };
-    return JSON.stringify(pkg, null, 2);
-};
-
 const buildReadme = (projectTitle) => {
     const title = typeof projectTitle === 'string' && projectTitle.trim().length > 0
         ? projectTitle.trim()
@@ -244,12 +217,7 @@ export async function POST(req) {
         );
         const resp = result.response.text();
         
-        let jsonResponse;
-        try {
-            jsonResponse = tryParseJson(resp);
-        } catch (parseError) {
-            throw parseError;
-        }
+        const jsonResponse = tryParseJson(resp);
         
         if (!jsonResponse || typeof jsonResponse !== 'object') {
             throw new Error("AI returned an invalid response format.");
