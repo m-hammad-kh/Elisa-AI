@@ -15,6 +15,7 @@ export default function PromptPage() {
   const [userInput, setUserInput] = useState("");
   const [technicalPrompt, setTechnicalPrompt] = useState("");
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -50,6 +51,7 @@ export default function PromptPage() {
     }
 
     setChatOnly(false);
+    setIsGenerating(true);
 
     const msg = {
       role: "user",
@@ -59,13 +61,18 @@ export default function PromptPage() {
     };
     setMessages(msg);
 
-    const workspaceID = await CreateWorkspace({
-      messages: [msg],
-      userId: user.id,
-      title: deriveTitle(userInput || "New Project from Image"),
-    });
+    try {
+      const workspaceID = await CreateWorkspace({
+        messages: [msg],
+        userId: user.id,
+        title: deriveTitle(userInput || "New Project from Image"),
+      });
 
-    router.push("/workspace/" + workspaceID);
+      router.push("/workspace/" + workspaceID);
+    } catch (error) {
+      console.error("Error creating workspace:", error);
+      setIsGenerating(false);
+    }
   };
 
   const handleImageUpload = (e) => {
@@ -196,6 +203,16 @@ export default function PromptPage() {
       </div>
 
       <div className="container relative z-10 mx-auto px-4 sm:px-6 lg:px-8">
+        {isGenerating && (
+          <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/80 backdrop-blur-md">
+            <div className="relative">
+              <div className="h-24 w-24 rounded-full border-t-4 border-primary animate-spin" />
+              <Sparkles className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-8 w-8 text-primary animate-pulse" />
+            </div>
+            <h2 className="mt-8 text-2xl font-black uppercase tracking-[0.4em] text-primary animate-pulse">Initializing...</h2>
+            <p className="mt-2 text-muted-foreground font-medium">Preparing your workspace</p>
+          </div>
+        )}
         <div className="mx-auto max-w-3xl text-center">
           <motion.h1
             initial={{ opacity: 0, y: 16 }}

@@ -11,8 +11,7 @@ const PageTransition = ({ children }) => {
     const [shouldShowContent, setShouldShowContent] = useState(true);
     const prevPathnameRef = useRef(pathname);
     const prevChildrenRef = useRef(children);
-    const isWorkspaceRoute = pathname?.includes('/workspace');
-    const shouldAnimate = !reduceMotion && !isWorkspaceRoute;
+    const shouldAnimate = !reduceMotion;
 
     useEffect(() => {
         const prevPathname = prevPathnameRef.current;
