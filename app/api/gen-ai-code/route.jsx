@@ -105,7 +105,7 @@ const coerceFilesShape = (files) => {
         return out;
     }
 
-    if (files && typeof files === 'object') {
+    if (typeof files === 'object') {
         // Handle nested shapes like { files: {...} }
         if (files.files && typeof files.files === 'object') return files.files;
         return files;
