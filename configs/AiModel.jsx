@@ -10,6 +10,41 @@ export const model = genAI.getGenerativeModel({
     model: "gemini-2.0-flash",
 });
 
+const CodeGenerationSchema = {
+    type: "object",
+    required: ["projectTitle", "explanation", "files", "generatedFiles"],
+    properties: {
+        projectTitle: { type: "string", description: "Project title" },
+        explanation: { type: "string", description: "Short user-facing summary" },
+        files: {
+            // IMPORTANT: Schema-based generation does not support dynamic object keys reliably.
+            // Use an array instead and convert to a map server-side.
+            type: "array",
+            items: {
+                type: "object",
+                required: ["path", "code"],
+                properties: {
+                    path: { type: "string", description: "Absolute file path like /index.html" },
+                    code: { type: "string", description: "Full file contents" }
+                }
+            }
+        },
+        generatedFiles: {
+            type: "array",
+            items: { type: "string" }
+        }
+    }
+};
+
+const EnhancePromptSchema = {
+    type: "object",
+    required: ["userFacingPrompt", "technicalPrompt"],
+    properties: {
+        userFacingPrompt: { type: "string" },
+        technicalPrompt: { type: "string" }
+    }
+};
+
 export const generationConfig = {
     temperature: 1,
     topP: 0.95,
@@ -24,6 +59,7 @@ export const CodeGenerationConfig = {
     topK: 40,
     maxOutputTokens: 8192, // Maximum generation limit for Gemini 2.0 Flash
     responseMimeType: "application/json",
+    responseSchema: CodeGenerationSchema,
 };
 
 export const EnhancePromptConfig = {
@@ -32,4 +68,5 @@ export const EnhancePromptConfig = {
     topK: 40,
     maxOutputTokens: 8192, // Increased for longer enhanced specs
     responseMimeType: "application/json",
+    responseSchema: EnhancePromptSchema,
 };

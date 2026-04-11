@@ -11,6 +11,8 @@ const hasValidPath = (value) => {
         normalized !== 'undefined' && 
         normalized !== '/null' && 
         normalized !== '/undefined' &&
+        normalized !== 'unknown' &&
+        normalized !== '/unknown' &&
         normalized !== '[object object]'
     );
 };
@@ -26,10 +28,90 @@ const toCodeString = (content) => {
     if (typeof content === 'string') return content;
     if (content && typeof content === 'object') {
         if (typeof content.code === 'string') return content.code;
+        if (typeof content.content === 'string') return content.content;
+        if (typeof content.text === 'string') return content.text;
         if (content.code == null) return '';
         return JSON.stringify(content, null, 2);
     }
     return '';
+};
+
+const fixClassContrast = (code) => {
+    const input = typeof code === 'string' ? code : '';
+    if (!input) return input;
+
+    const darkBg = /\bbg-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightBg = /\bbg-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50)\b/;
+    const darkText = /\btext-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightText = /\btext-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50|gray-100|slate-100)\b/;
+
+    const fixClassValue = (value) => {
+        let v = value;
+        const hasAnyTextClass = /\btext-[^\s]+\b/.test(v);
+        if (darkBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-100`;
+        }
+        if (darkBg.test(v) && darkText.test(v)) {
+            v = v.replace(/\btext-black\b/g, 'text-white');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-9\d\d\b/g, 'text-slate-100');
+        }
+        if (lightBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-900`;
+        }
+        if (lightBg.test(v) && lightText.test(v)) {
+            v = v.replace(/\btext-white\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-50\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(gray|slate)-100\b/g, 'text-slate-900');
+        }
+        return v;
+    };
+
+    const rewriteAttr = (attr) => new RegExp(`\\b${attr}\\s*=\\s*"([^"]*)"`, 'g');
+    const rewriteAttrS = (attr) => new RegExp(`\\b${attr}\\s*=\\s*'([^']*)'`, 'g');
+
+    let out = input
+        .replace(rewriteAttr('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttr('class'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('class'), (m, v) => m.replace(v, fixClassValue(v)));
+
+    return out;
+};
+
+const coerceFilesShape = (files) => {
+    // We primarily expect: { "/path": { code: "..." }, ... }
+    // Some models occasionally return: [{ path: "/path", code: "..." }, ...]
+    if (!files) return {};
+
+    if (Array.isArray(files)) {
+        const out = {};
+        for (const entry of files) {
+            if (!entry || typeof entry !== 'object') continue;
+            const p = typeof entry.path === 'string'
+                ? entry.path
+                : typeof entry.filePath === 'string'
+                    ? entry.filePath
+                    : typeof entry.filename === 'string'
+                        ? entry.filename
+                        : '';
+            if (!p) continue;
+            const codeCandidate =
+                (typeof entry.code === 'string' && entry.code) ||
+                (typeof entry.content === 'string' && entry.content) ||
+                (typeof entry.text === 'string' && entry.text) ||
+                toCodeString(entry);
+            out[p] = { code: codeCandidate };
+        }
+        return out;
+    }
+
+    if (files && typeof files === 'object') {
+        // Handle nested shapes like { files: {...} }
+        if (files.files && typeof files.files === 'object') return files.files;
+        return files;
+    }
+
+    return {};
 };
 
 const fixUnsafeCode = (input) => {
@@ -62,8 +144,28 @@ const fixUnsafeCode = (input) => {
     code = code.replace(/(src|href|to|action|poster)\s*=\s*\{\s*(null|undefined|['"]['"])\s*\}/g, '$1="/"');
     code = code.replace(/(src|href|to|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
 
+    // Fix invalid JSX attribute paths (Route/Link)
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*(null|undefined)\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*['"]\s*['"]\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
+
+    // Remove broken closing tags like "</n" before a valid closing tag
+    code = code.replace(/<\/n\s*(?=\n\s*<\/)/g, '');
+    code = code.replace(/<\/n\s*>/g, '');
+    // Broader fix: remove stray "</n" (NOT "</nav>") that commonly appears in broken JSX strings
+    code = code.replace(/<\/n(?=\s|$|<)/g, '');
+    // Even broader, but safe: keep only real tags like </nav> and </noscript>
+    code = code.replace(/<\/n(?!av\b|oscript\b)/gi, '');
+
+    // Fix common JSX corruption where a block closing tag is accidentally appended inside a <p> text node.
+    // Example: <p>... </motion.div>  => <p>...</p>\n</motion.div>
+    code = code.replace(/(<p\b[^>]*>[^<]*)(\s*)(<\/(?!p\b)[^>]+>)/g, '$1</p>\n$2$3');
+
     // Fix new URL(null/undefined, ...) usage
     code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
+
+    // Best-effort contrast fix for obviously unreadable combinations on the same element.
+    code = fixClassContrast(code);
 
     return code;
 };
@@ -77,31 +179,113 @@ const stripMarkdownCodeFences = (value) => {
     return trimmed;
 };
 
-const extractFirstJsonObject = (value) => {
+const extractFirstCompleteJsonObject = (value) => {
     const input = typeof value === 'string' ? value : '';
     const start = input.indexOf('{');
     if (start === -1) return input.trim();
-    
-    // Try to find the last }
-    const end = input.lastIndexOf('}');
-    if (end !== -1 && end > start) {
-        return input.substring(start, end + 1);
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < input.length; i += 1) {
+        const ch = input[i];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+
+        if (ch === '{') {
+            depth += 1;
+            continue;
+        }
+        if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return input.slice(start, i + 1).trim();
+            }
+            continue;
+        }
     }
-    
-    // If no closing brace, return from start onwards
+
+    // If the model truncated mid-object, fall back to the remainder (repair may close braces).
     return input.substring(start).trim();
+};
+
+const escapeJsonControlChars = (value) => {
+    const input = typeof value === 'string' ? value : '';
+    let out = '';
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < input.length; i += 1) {
+        const ch = input[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                out += ch;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                out += ch;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+                out += ch;
+                continue;
+            }
+            if (ch === '\n') {
+                out += '\\n';
+                continue;
+            }
+            if (ch === '\r') {
+                out += '\\r';
+                continue;
+            }
+            if (ch === '\t') {
+                out += '\\t';
+                continue;
+            }
+            out += ch;
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            out += ch;
+            continue;
+        }
+        out += ch;
+    }
+    return out;
 };
 
 const tryParseJson = (value) => {
     const input = stripMarkdownCodeFences(value);
-    const text = extractFirstJsonObject(input);
+    const text = extractFirstCompleteJsonObject(input);
     
     try {
         return JSON.parse(text);
     } catch (parseError) {
         // Robust fixing for common AI JSON errors
         try {
-            let fixed = text.trim();
+            let fixed = escapeJsonControlChars(text.trim());
             
             // 1. Fix unterminated string
             // Check if we are inside a string (odd number of unescaped quotes)
@@ -194,7 +378,65 @@ const withTimeout = async (promise, ms, label) => {
     }
 };
 
-const AI_TIMEOUT_MS = 70000;
+const AI_TIMEOUT_MS = 110000;
+const JSON_REPAIR_TIMEOUT_MS = 40000;
+const MAX_REPAIR_INPUT_CHARS = 120000;
+
+const normalizeFilesMap = (rawFiles) => {
+    const coerced = coerceFilesShape(rawFiles);
+    const normalizedFiles = {};
+
+    Object.entries(coerced || {}).forEach(([rawPath, rawContent]) => {
+        // Some models may emit empty keys but include the real path in the value object
+        let candidatePath = rawPath;
+        if ((!candidatePath || !String(candidatePath).trim()) && rawContent && typeof rawContent === 'object') {
+            candidatePath =
+                (typeof rawContent.path === 'string' && rawContent.path) ||
+                (typeof rawContent.filePath === 'string' && rawContent.filePath) ||
+                (typeof rawContent.filename === 'string' && rawContent.filename) ||
+                '';
+        }
+
+        const absolutePath = toAbsolutePath(candidatePath);
+        if (!hasValidPath(absolutePath)) return;
+        const code = fixUnsafeCode(toCodeString(rawContent));
+        if (!code || !code.trim()) return;
+        normalizedFiles[absolutePath] = { code };
+    });
+
+    return normalizedFiles;
+};
+
+const parseJsonWithRepair = async (rawText) => {
+    try {
+        return tryParseJson(rawText);
+    } catch (parseError) {
+        const input = typeof rawText === 'string' ? rawText.trim() : '';
+        if (!input || input.length > MAX_REPAIR_INPUT_CHARS) {
+            throw parseError;
+        }
+
+        const repairSession = model.startChat({
+            generationConfig: CodeGenerationConfig,
+            history: [],
+        });
+        const repairPrompt = [
+            "You are a JSON repair tool.",
+            "Return ONLY valid JSON. Do not add markdown or commentary.",
+            "Preserve all file paths and code exactly; only fix escaping and structural JSON issues.",
+            "Input JSON (possibly invalid):",
+            input
+        ].join("\n\n");
+
+        const repairResult = await withTimeout(
+            repairSession.sendMessage(repairPrompt),
+            JSON_REPAIR_TIMEOUT_MS,
+            "Repair"
+        );
+        const repairedText = repairResult.response.text();
+        return tryParseJson(repairedText);
+    }
+};
 
 export async function POST(req) {
     const body = await req.json();
@@ -205,19 +447,41 @@ export async function POST(req) {
         : 'Create a modern, responsive, content-rich multi-page website with a premium design.';
     console.log("PROMPT RECEIVED (Length):", effectivePrompt.length);
     try {
-        const GenAiCode = model.startChat({
-            generationConfig: CodeGenerationConfig,
-            history: [],
-        });
+        const runGenerationOnce = async (promptText, label) => {
+            const session = model.startChat({
+                generationConfig: CodeGenerationConfig,
+                history: [],
+            });
+            const result = await withTimeout(
+                session.sendMessage(promptText),
+                AI_TIMEOUT_MS,
+                label
+            );
+            return result.response.text();
+        };
 
-        const result = await withTimeout(
-            GenAiCode.sendMessage(effectivePrompt),
-            AI_TIMEOUT_MS,
-            'Generation'
-        );
-        const resp = result.response.text();
-        
-        const jsonResponse = tryParseJson(resp);
+        const retryPrompt = [
+            effectivePrompt,
+            '',
+            'RETRY (CRITICAL): Your previous response was malformed JSON or had invalid/missing file paths.',
+            'Return ONLY valid JSON that matches the schema.',
+            'The `files` field MUST be an ARRAY of objects: { "path": "/index.html", "code": "..." }.',
+            'Each `path` MUST be a valid non-empty absolute path like `/index.html`, `/index.jsx`, `/App.jsx`, `/pages/Home.jsx`.',
+            'Never use `null`, `undefined`, empty strings, or `/unknown` for any path.',
+            'Escape all newlines inside code strings as `\\n` and quotes as `\\\"`.',
+            'Include at least: `/index.html`, `/index.jsx`, `/App.jsx`, `/pages/Home.jsx`, `/pages/Contact.jsx`, `/components/Navbar.jsx`, `/components/Footer.jsx`, `/package.json`.'
+        ].join('\n');
+
+        let usedRetry = false;
+        const respInitial = await runGenerationOnce(effectivePrompt, 'Generation');
+        let jsonResponse;
+        try {
+            jsonResponse = await parseJsonWithRepair(respInitial);
+        } catch (e) {
+            usedRetry = true;
+            const respRetry = await runGenerationOnce(retryPrompt, 'Generation Retry');
+            jsonResponse = await parseJsonWithRepair(respRetry);
+        }
         
         if (!jsonResponse || typeof jsonResponse !== 'object') {
             throw new Error("AI returned an invalid response format.");
@@ -227,16 +491,22 @@ export async function POST(req) {
             throw new Error("AI response is missing the 'files' data.");
         }
         
-        const normalizedFiles = {};
-        Object.entries(jsonResponse.files).forEach(([rawPath, rawContent]) => {
-            const absolutePath = toAbsolutePath(rawPath);
-            if (!hasValidPath(absolutePath)) return;
-            const code = fixUnsafeCode(toCodeString(rawContent));
-            normalizedFiles[absolutePath] = { code };
-        });
+        let normalizedFiles = normalizeFilesMap(jsonResponse.files);
+
+        // Retry once if the model returned unusable paths/shape
+        if (Object.keys(normalizedFiles).length === 0 && !usedRetry) {
+            usedRetry = true;
+            const respRetry = await runGenerationOnce(retryPrompt, 'Generation Retry');
+            jsonResponse = await parseJsonWithRepair(respRetry);
+            normalizedFiles = normalizeFilesMap(jsonResponse?.files);
+        }
 
         if (Object.keys(normalizedFiles).length === 0) {
-            throw new Error("AI returned files, but all file paths were invalid.");
+            // Include a tiny hint for debugging without leaking large payloads
+            const hint = typeof respInitial === 'string'
+                ? respInitial.slice(0, 400)
+                : '';
+            throw new Error(`AI returned files, but all file paths were invalid. (hint: ${hint})`);
         }
 
         jsonResponse.files = normalizedFiles;
@@ -310,5 +580,3 @@ export async function POST(req) {
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
-
-

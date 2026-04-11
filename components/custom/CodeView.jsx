@@ -41,7 +41,9 @@ const isValidSandboxPath = (value) => {
         normalized !== 'null' && 
         normalized !== 'undefined' && 
         normalized !== '/null' && 
-        normalized !== '/undefined' && 
+        normalized !== '/undefined' &&
+        normalized !== 'unknown' &&
+        normalized !== '/unknown' &&
         normalized !== '[object object]'
     );
 };
@@ -63,6 +65,46 @@ const toSandboxCode = (content) => {
         return JSON.stringify(content, null, 2);
     }
     return '';
+};
+
+const fixClassContrast = (code) => {
+    const input = typeof code === 'string' ? code : '';
+    if (!input) return input;
+
+    const darkBg = /\bbg-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightBg = /\bbg-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50)\b/;
+    const darkText = /\btext-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightText = /\btext-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50|gray-100|slate-100)\b/;
+
+    const fixClassValue = (value) => {
+        let v = value;
+        const hasAnyTextClass = /\btext-[^\s]+\b/.test(v);
+        if (darkBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-100`;
+        }
+        if (darkBg.test(v) && darkText.test(v)) {
+            v = v.replace(/\btext-black\b/g, 'text-white');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-9\d\d\b/g, 'text-slate-100');
+        }
+        if (lightBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-900`;
+        }
+        if (lightBg.test(v) && lightText.test(v)) {
+            v = v.replace(/\btext-white\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-50\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(gray|slate)-100\b/g, 'text-slate-900');
+        }
+        return v;
+    };
+
+    const rewriteAttr = (attr) => new RegExp(`\\b${attr}\\s*=\\s*"([^"]*)"`, 'g');
+    const rewriteAttrS = (attr) => new RegExp(`\\b${attr}\\s*=\\s*'([^']*)'`, 'g');
+
+    return input
+        .replace(rewriteAttr('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttr('class'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('class'), (m, v) => m.replace(v, fixClassValue(v)));
 };
 
 const fixUnsafeSandboxCode = (input) => {
@@ -119,8 +161,26 @@ const fixUnsafeSandboxCode = (input) => {
     code = code.replace(/(src|href|to|action|poster)\s*=\s*\{\s*(null|undefined|['"]['"])\s*\}/g, '$1="/"');
     code = code.replace(/(src|href|to|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
 
+    // Fix invalid JSX attribute paths (Route/Link)
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*(null|undefined)\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*['"]\s*['"]\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
+
+    // Remove broken closing tags like "</n" before a valid closing tag
+    code = code.replace(/<\/n\s*(?=\n\s*<\/)/g, '');
+    code = code.replace(/<\/n\s*>/g, '');
+    // Even broader, but safe: keep only real tags like </nav> and </noscript>
+    code = code.replace(/<\/n(?!av\b|oscript\b)/gi, '');
+
+    // Fix common JSX corruption where a block closing tag is accidentally appended inside a <p> text node.
+    // Example: <p>... </motion.div>  => <p>...</p>\n</motion.div>
+    code = code.replace(/(<p\b[^>]*>[^<]*)(\s*)(<\/(?!p\b)[^>]+>)/g, '$1</p>\n$2$3');
+
     // Fix new URL(null/undefined, ...) usage
     code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
+
+    // Best-effort contrast fix for obviously unreadable combinations on the same element.
+    code = fixClassContrast(code);
 
     return code;
 };
@@ -129,6 +189,51 @@ const SANDBOX_EXTERNAL_RESOURCES = [
     'https://cdn.tailwindcss.com',
     'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css'
 ];
+
+const STYLE_PRESETS = [
+    {
+        name: "Neo Brutalist Citrus",
+        palette: "charcoal #0f172a, citrus #f59e0b, mint #34d399, cream #fff7ed",
+        fonts: "Space Grotesk for headings, Manrope for body",
+        hero: "Split hero with bold left text and a large right image in an angled frame",
+        background: "Layered gradients with subtle grain texture",
+        accents: "Thick borders, pill buttons, high-contrast CTA"
+    },
+    {
+        name: "Modern Editorial",
+        palette: "ink #0b0f19, pearl #f8fafc, rose #fb7185, gold #fbbf24",
+        fonts: "Playfair Display for headings, Source Sans 3 for body",
+        hero: "Asymmetric hero with stacked text and a tall portrait image",
+        background: "Soft paper texture with oversized typography accents",
+        accents: "Underline links, thin rules, editorial cards"
+    },
+    {
+        name: "Coastal Tech",
+        palette: "navy #0b1f3a, teal #14b8a6, sky #38bdf8, sand #fde68a",
+        fonts: "Outfit for headings, Plus Jakarta Sans for body",
+        hero: "Wide hero with panoramic image and floating stat cards",
+        background: "Wave-like gradients with glass panels",
+        accents: "Rounded buttons, subtle glow highlights"
+    },
+    {
+        name: "Retro Future",
+        palette: "black #0a0a0a, electric #7c3aed, neon #22d3ee, lime #a3e635",
+        fonts: "Sora for headings, Space Mono for labels",
+        hero: "Centered hero with layered image collage and neon ring",
+        background: "Grid pattern with glowing gradients",
+        accents: "Neon borders, hover glows, animated pills"
+    },
+    {
+        name: "Warm Minimal",
+        palette: "espresso #1f1b16, terracotta #f97316, clay #fed7aa, olive #84a98c",
+        fonts: "DM Serif Display for headings, Work Sans for body",
+        hero: "Two-column hero with clean image and stacked CTA buttons",
+        background: "Soft radial gradients with warm tint",
+        accents: "Subtle shadows, rounded corners, calm spacing"
+    }
+];
+
+const pickStylePreset = () => STYLE_PRESETS[Math.floor(Math.random() * STYLE_PRESETS.length)];
 
 const MAX_PROMPT_MESSAGE_CHARS = 22000;
 const MAX_PROMPT_FILES_CHARS = 420000;
@@ -674,10 +779,103 @@ export default Footer;`
 
 export default Navbar;`
         );
+
+        // Ensure Navbar/Footer exist AND are rendered in App.jsx (models sometimes forget to mount them)
+        const ensureNavbarFooterInApp = () => {
+            if (!hasFile('/App.jsx')) return;
+            if (!hasFile('/components/Navbar.jsx') || !hasFile('/components/Footer.jsx')) return;
+
+            let out = toSandboxCode(next['/App.jsx']) || '';
+            if (!out.trim()) return;
+
+            const needsNavbar = !out.includes('<Navbar');
+            const needsFooter = !out.includes('<Footer');
+            if (!needsNavbar && !needsFooter) return;
+
+            const ensureImport = (name) => {
+                if (new RegExp(`\\bimport\\s+${name}\\b`).test(out)) return;
+                const stmt = `import ${name} from "./components/${name}.jsx";\n`;
+                if (/^import\s.+/m.test(out)) {
+                    out = out.replace(/^(?:import[^\n]*\n)+/m, (m) => m + stmt);
+                } else {
+                    out = stmt + out;
+                }
+            };
+
+            if (needsNavbar) ensureImport('Navbar');
+            if (needsFooter) ensureImport('Footer');
+
+            // Preferred: if BrowserRouter exists, mount inside it so Links work.
+            if (out.includes('<BrowserRouter')) {
+                if (needsNavbar) {
+                    out = out.replace(/(<BrowserRouter[^>]*>)/m, `$1\n      <Navbar />`);
+                }
+                if (needsFooter) {
+                    out = out.replace(/(<\/BrowserRouter>)/m, `      <Footer />\n    $1`);
+                }
+                setFile('/App.jsx', out);
+                return;
+            }
+
+            // Fallback: wrap returned JSX in a fragment and add Navbar/Footer around it.
+            const returnMatch = /return\s*\(/m.exec(out);
+            const closeIdx = out.lastIndexOf(');');
+            if (!returnMatch || closeIdx === -1) {
+                // Handle common pattern: `return <div>...</div>;` (no parentheses)
+                const returnIdx = out.indexOf('return');
+                if (returnIdx !== -1) {
+                    const semiIdx = out.indexOf(';', returnIdx);
+                    if (semiIdx !== -1) {
+                        const stmt = out.slice(returnIdx, semiIdx + 1);
+                        if (/return\s*</m.test(stmt)) {
+                            let injectedStmt = stmt;
+                            const firstGt = injectedStmt.indexOf('>');
+                            const lastClose = injectedStmt.lastIndexOf('</');
+                            if (firstGt !== -1 && lastClose !== -1 && lastClose > firstGt) {
+                                if (needsNavbar) {
+                                    injectedStmt = injectedStmt.slice(0, firstGt + 1) + `\n    <Navbar />` + injectedStmt.slice(firstGt + 1);
+                                }
+                                if (needsFooter) {
+                                    const lastClose2 = injectedStmt.lastIndexOf('</');
+                                    injectedStmt = injectedStmt.slice(0, lastClose2) + `\n    <Footer />\n  ` + injectedStmt.slice(lastClose2);
+                                }
+                                out = out.slice(0, returnIdx) + injectedStmt + out.slice(semiIdx + 1);
+                                setFile('/App.jsx', out);
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                setFile('/App.jsx', out);
+                return;
+            }
+
+            const openIdx = returnMatch.index + returnMatch[0].length;
+            const before = out.slice(0, openIdx);
+            const body = out.slice(openIdx, closeIdx);
+            const after = out.slice(closeIdx); // includes ');
+
+            const injected = [
+                '\n    <>',
+                needsNavbar ? '      <Navbar />' : null,
+                body.trimEnd(),
+                needsFooter ? '      <Footer />' : null,
+                '    </>\n  '
+            ].filter(Boolean).join('\n');
+
+            out = before + injected + after;
+            setFile('/App.jsx', out);
+        };
+
+        ensureNavbarFooterInApp();
         
         // Final sanity check for entry points
         if (!hasFile('/index.html')) {
             setFile('/index.html', Lookup.DEFAULT_FILE['/index.html'].code);
+        }
+        if (!hasFile('/styles.css')) {
+            setFile('/styles.css', `:root { color-scheme: light dark; }\nhtml, body { height: 100%; }\nbody { margin: 0; background: #0b1220; color: #e5e7eb; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }\n`);
         }
 
         return next;
@@ -786,6 +984,7 @@ export default Navbar;`
         const currentFiles = sandpackFilesRef.current && Object.keys(sandpackFilesRef.current).length > 0
             ? sandpackFilesRef.current
             : files;
+        const stylePreset = !isUpdate ? pickStylePreset() : null;
         
         let currentFilesToSync = preprocessFiles(currentFiles);
         const promptFilesResult = buildPromptFiles(currentFilesToSync, activeEditorFile);
@@ -798,6 +997,16 @@ export default Navbar;`
         };
 
         let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        if (!isUpdate && stylePreset) {
+            PROMPT += `\n\n DESIGN VARIATION SEED (MANDATORY):
+- Theme: ${stylePreset.name}
+- Palette: ${stylePreset.palette}
+- Font pairing: ${stylePreset.fonts} (include Google Fonts link or @import)
+- Hero layout: ${stylePreset.hero}
+- Background treatment: ${stylePreset.background}
+- Accent details: ${stylePreset.accents}
+\n\n HERO IMAGE REQUIREMENT: The hero section MUST include at least one prominent image using the required Pexels search URL pattern (landscape).`;
+        }
         if (promptFilesResult.useCompression) {
             PROMPT += "\n\n NOTE: Some files were truncated or omitted from content. Use fileIndex for awareness and avoid rewriting unrelated files.";
         }
@@ -817,12 +1026,23 @@ export default Navbar;`
         }
         
         try {
-            const result = await axios.post('/api/gen-ai-code', {
+            const postGenerate = () => axios.post('/api/gen-ai-code', {
                 prompt: PROMPT,
                 existingFiles: cleanFiles
             }, {
-                timeout: 80000
+                timeout: 130000
             });
+
+            let result;
+            try {
+                result = await postGenerate();
+            } catch (err) {
+                const isTimeout = err?.code === 'ECONNABORTED' || /timeout/i.test(err?.message || '');
+                if (!isTimeout) throw err;
+                // One quick retry for transient model latency
+                await new Promise(resolve => setTimeout(resolve, 450));
+                result = await postGenerate();
+            }
 
             if (result.data?.error) {
                 throw new Error(result.data.error);
