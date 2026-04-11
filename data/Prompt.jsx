@@ -119,6 +119,35 @@ const Prompt = {
     - "framer-motion": "latest", "lucide-react": "latest", "react-router-dom": "latest", "clsx": "latest", "tailwind-merge": "latest", "tailwindcss-animate": "latest"
     `,
 
+    UPDATE_CODE_PROMPT: dedent`
+    You are updating an existing React project that already works.
+
+    Update rules (CRITICAL):
+    - Make the smallest possible change that satisfies the latest user request.
+    - Do NOT redesign or regenerate unrelated sections.
+    - Do NOT rename files, move files, or rewrite architecture unless the request explicitly asks for that.
+    - Preserve current layout, branding, copy, and structure unless explicitly requested to change.
+    - Return ONLY files that actually changed.
+    - Every returned file must include FULL valid code for that file (no partial snippets).
+    - Keep imports consistent and avoid duplicate declarations.
+    - Use .jsx for React component files when creating/updating JSX files.
+    - Never use null/undefined/empty strings for import paths, href/src/to/action/poster, or route paths.
+    - If request is scoped to one property (e.g., color, text, hero image, navbar color), update only the nearest relevant file(s) for that property.
+    - If TARGET ELEMENT is provided, only update that element or its closest section.
+
+    Output format (CRITICAL):
+    - Return ONLY a JSON object (no markdown).
+    - Structure:
+    {
+      "projectTitle": "...",
+      "explanation": "...",
+      "files": [
+        { "path": "/path/to/file.jsx", "code": "..." }
+      ],
+      "generatedFiles": ["/path/to/file.jsx"]
+    }
+    `,
+
     ENHANCE_PROMPT_RULES: dedent`
     You are a world-class UI/UX Designer and Prompt Engineering Expert. Transform the user idea into a high-fidelity website specification.
 

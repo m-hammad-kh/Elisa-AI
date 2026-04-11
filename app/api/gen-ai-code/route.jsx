@@ -441,10 +441,13 @@ const parseJsonWithRepair = async (rawText) => {
 export async function POST(req) {
     const body = await req.json();
     const prompt = body?.prompt;
+    const mode = body?.mode === 'update' ? 'update' : 'create';
     const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '');
     const effectivePrompt = safePrompt.trim().length > 0
         ? safePrompt
-        : 'Create a modern, responsive, content-rich multi-page website with a premium design.';
+        : mode === 'update'
+            ? 'Update the existing website with minimal targeted changes and keep all unrelated code intact.'
+            : 'Create a modern, responsive, content-rich multi-page website with a premium design.';
     console.log("PROMPT RECEIVED (Length):", effectivePrompt.length);
     try {
         const runGenerationOnce = async (promptText, label) => {
@@ -460,7 +463,7 @@ export async function POST(req) {
             return result.response.text();
         };
 
-        const retryPrompt = [
+        const retryPromptLines = [
             effectivePrompt,
             '',
             'RETRY (CRITICAL): Your previous response was malformed JSON or had invalid/missing file paths.',
@@ -468,9 +471,16 @@ export async function POST(req) {
             'The `files` field MUST be an ARRAY of objects: { "path": "/index.html", "code": "..." }.',
             'Each `path` MUST be a valid non-empty absolute path like `/index.html`, `/index.jsx`, `/App.jsx`, `/pages/Home.jsx`.',
             'Never use `null`, `undefined`, empty strings, or `/unknown` for any path.',
-            'Escape all newlines inside code strings as `\\n` and quotes as `\\\"`.',
-            'Include at least: `/index.html`, `/index.jsx`, `/App.jsx`, `/pages/Home.jsx`, `/pages/Contact.jsx`, `/components/Navbar.jsx`, `/components/Footer.jsx`, `/package.json`.'
-        ].join('\n');
+            'Escape all newlines inside code strings as `\\n` and quotes as `\\\"`.'
+        ];
+
+        if (mode === 'update') {
+            retryPromptLines.push('This is UPDATE MODE: return ONLY the files that changed. Do not include boilerplate or unrelated files.');
+        } else {
+            retryPromptLines.push('Include at least: `/index.html`, `/index.jsx`, `/App.jsx`, `/pages/Home.jsx`, `/pages/Contact.jsx`, `/components/Navbar.jsx`, `/components/Footer.jsx`, `/package.json`.');
+        }
+
+        const retryPrompt = retryPromptLines.join('\n');
 
         let usedRetry = false;
         const respInitial = await runGenerationOnce(effectivePrompt, 'Generation');

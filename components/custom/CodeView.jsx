@@ -696,7 +696,9 @@ function CodeView() {
         return keys.find(k => k.endsWith('.jsx')) || keys[0] || '/index.html';
     }, []);
 
-    const normalizeGeneratedFiles = useCallback((inputFiles) => {
+    const normalizeGeneratedFiles = useCallback((inputFiles, options = {}) => {
+        const mode = options?.mode === 'update' ? 'update' : 'create';
+        const isUpdateMode = mode === 'update';
         const next = { ...(inputFiles || {}) };
         const hasFile = (path) => Boolean(next[path] && typeof toSandboxCode(next[path]) === 'string' && toSandboxCode(next[path]).trim().length > 0);
         const setFile = (path, content) => {
@@ -751,7 +753,7 @@ function CodeView() {
             delete next['/App.css'];
         }
 
-        ensureDefaultExport(
+        if (!isUpdateMode) ensureDefaultExport(
             '/components/Footer.jsx',
             'Footer',
             `const Footer = () => (
@@ -763,7 +765,7 @@ function CodeView() {
 export default Footer;`
         );
 
-        ensureDefaultExport(
+        if (!isUpdateMode) ensureDefaultExport(
             '/components/Navbar.jsx',
             'Navbar',
             `const Navbar = () => (
@@ -868,13 +870,13 @@ export default Navbar;`
             setFile('/App.jsx', out);
         };
 
-        ensureNavbarFooterInApp();
+        if (!isUpdateMode) ensureNavbarFooterInApp();
         
         // Final sanity check for entry points
-        if (!hasFile('/index.html')) {
+        if (!isUpdateMode && !hasFile('/index.html')) {
             setFile('/index.html', Lookup.DEFAULT_FILE['/index.html'].code);
         }
-        if (!hasFile('/styles.css')) {
+        if (!isUpdateMode && !hasFile('/styles.css')) {
             setFile('/styles.css', `:root { color-scheme: light dark; }\nhtml, body { height: 100%; }\nbody { margin: 0; background: #0b1220; color: #e5e7eb; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }\n`);
         }
 
@@ -937,6 +939,7 @@ export default Navbar;`
         // Count user messages to determine if this is an update
         const userMessagesCount = messages.filter(m => m.role === 'user').length;
         const isUpdate = userMessagesCount > 1;
+        const latestUserMessage = [...messages].reverse().find((msg) => msg.role === 'user');
 
         // Clean messages to avoid sending redundant huge code blocks
         // BUT keep enough context for updates
@@ -996,7 +999,8 @@ export default Navbar;`
             fileIndex
         };
 
-        let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        const promptInstruction = isUpdate ? Prompt.UPDATE_CODE_PROMPT : Prompt.CODE_GEN_PROMPT;
+        let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + promptInstruction;
         if (!isUpdate && stylePreset) {
             PROMPT += `\n\n DESIGN VARIATION SEED (MANDATORY):
 - Theme: ${stylePreset.name}
@@ -1010,9 +1014,8 @@ export default Navbar;`
         if (promptFilesResult.useCompression) {
             PROMPT += "\n\n NOTE: Some files were truncated or omitted from content. Use fileIndex for awareness and avoid rewriting unrelated files.";
         }
-        const latestTargetedMessage = [...messages].reverse().find((msg) => msg.role === 'user' && msg.selectedElement);
-        const targetedHint = latestTargetedMessage?.selectedElement
-            ? formatSelectedElement(latestTargetedMessage.selectedElement)
+        const targetedHint = latestUserMessage?.selectedElement
+            ? formatSelectedElement(latestUserMessage.selectedElement)
             : '';
         
         if (isUpdate) {
@@ -1028,7 +1031,8 @@ export default Navbar;`
         try {
             const postGenerate = () => axios.post('/api/gen-ai-code', {
                 prompt: PROMPT,
-                existingFiles: cleanFiles
+                existingFiles: cleanFiles,
+                mode: isUpdate ? 'update' : 'create'
             }, {
                 timeout: 130000
             });
@@ -1050,12 +1054,16 @@ export default Navbar;`
 
             const processedAiFiles = preprocessFiles(result.data?.files || {});
             
-            // Merge AI generated files with current files. 
-            // We prioritize AI files, then current files, and only use DEFAULT_FILE as a base for missing essentials.
-            const mergedFiles = normalizeGeneratedFiles({ 
-                ...Lookup.DEFAULT_FILE, 
-                ...currentFilesToSync, 
-                ...processedAiFiles 
+            // In update mode, keep the current project intact and layer only returned file updates.
+            // In create mode, keep default essentials as bootstrap fallback.
+            const mergedBase = isUpdate
+                ? { ...currentFilesToSync }
+                : { ...Lookup.DEFAULT_FILE, ...currentFilesToSync };
+            const mergedFiles = normalizeGeneratedFiles({
+                ...mergedBase,
+                ...processedAiFiles
+            }, {
+                mode: isUpdate ? 'update' : 'create'
             });
             
             setFiles(mergedFiles);
