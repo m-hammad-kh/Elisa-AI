@@ -49,6 +49,12 @@ const Prompt = {
     - **Multi-Page Experience:** Always include a **Contact Us** page with a functional **Google Maps / Leaflet Location** section (using an iframe or mock map UI).
     - **Respect Existing Contact Page:** If this is an update request and the user did NOT ask to change Contact, keep the Contact page as-is.
     - **Navbar & Footer (CRITICAL):** Always generate BOTH /components/Navbar.jsx and /components/Footer.jsx and ALWAYS render them in /App.jsx on every page. Footer must have a solid (non-transparent) background and readable text.
+    - **Footer Safety Contract (CRITICAL):**
+        - Footer MUST be exported as default: \`export default Footer\`.
+        - Keep Footer self-contained. Do NOT import missing local components/assets inside Footer.
+        - In Footer, avoid external icon/component dependencies; prefer plain HTML tags to prevent undefined component runtime errors.
+        - If Footer uses any icon/component, import it explicitly in \`/components/Footer.jsx\`.
+        - Never render undefined JSX components inside Footer.
     - **Clean Scaling:** ALWAYS use the **.map()** function to render repetitive UI elements.
     - **Routing:** Use **react-router-dom** for navigation between Home, Features, About, and Contact. Wrap your root component (App.jsx) in **BrowserRouter** if you use routing.
 
@@ -132,6 +138,7 @@ const Prompt = {
     - Keep imports consistent and avoid duplicate declarations.
     - Use .jsx for React component files when creating/updating JSX files.
     - Never use null/undefined/empty strings for import paths, href/src/to/action/poster, or route paths.
+    - If \`/components/Footer.jsx\` is changed, keep it safe: default export required, no missing local imports, and no undefined JSX components.
     - If request is scoped to one property (e.g., color, text, hero image, navbar color), update only the nearest relevant file(s) for that property.
     - If TARGET ELEMENT is provided, only update that element or its closest section.
 

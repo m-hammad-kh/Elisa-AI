@@ -704,6 +704,136 @@ function CodeView() {
         const setFile = (path, content) => {
             next[path] = { code: fixUnsafeSandboxCode(toSandboxCode(content)) };
         };
+        const FALLBACK_FOOTER_CODE = `const Footer = () => {
+  const year = new Date().getFullYear();
+  return (
+    <footer className="mt-16 border-t border-slate-200 bg-slate-900 text-slate-200">
+      <div className="mx-auto max-w-6xl px-6 py-12">
+        <div className="grid gap-10 md:grid-cols-3">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Your Brand</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              Building thoughtful digital experiences with clean design and reliable performance.
+            </p>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-100">Quick Links</h4>
+            <ul className="mt-3 space-y-2 text-sm text-slate-300">
+              <li><a href="/" className="hover:text-white transition-colors">Home</a></li>
+              <li><a href="/about" className="hover:text-white transition-colors">About</a></li>
+              <li><a href="/contact" className="hover:text-white transition-colors">Contact</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-100">Contact</h4>
+            <p className="mt-3 text-sm text-slate-300">hello@example.com</p>
+            <p className="mt-1 text-sm text-slate-300">+1 (555) 123-4567</p>
+          </div>
+        </div>
+        <div className="mt-10 border-t border-slate-700 pt-6 text-sm text-slate-400">
+          &copy; {year} Your Brand. All rights reserved.
+        </div>
+      </div>
+    </footer>
+  );
+};
+
+export default Footer;`;
+        const isFooterCodeSafe = (code) => {
+            const input = typeof code === 'string' ? code : '';
+            if (!input.trim()) return false;
+            if (!/\bexport\s+default\b/.test(input)) return false;
+
+            const importRegex = /^\s*import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/gm;
+            const importedNames = new Set();
+            let hasUnsafeImport = false;
+            let importMatch;
+            while ((importMatch = importRegex.exec(input)) !== null) {
+                const clause = (importMatch[1] || '').trim();
+                const source = (importMatch[2] || '').trim();
+                const normalizedSource = source.replace(/\/+$/, '');
+
+                // Footer must stay self-contained to avoid undefined nested components at runtime.
+                if (normalizedSource.startsWith('.')) {
+                    return false;
+                }
+                if (normalizedSource !== 'react' && normalizedSource !== 'react-router-dom') {
+                    return false;
+                }
+                if (!clause) continue;
+                if (clause.startsWith('{')) {
+                    const names = clause
+                        .replace(/[{}]/g, '')
+                        .split(',')
+                        .map((v) => v.trim())
+                        .filter(Boolean);
+                    names.forEach((name) => {
+                        const parts = name.split(/\s+as\s+/i);
+                        const importName = (parts[1] || parts[0]).trim();
+                        if (normalizedSource === 'react-router-dom' && importName !== 'Link' && importName !== 'NavLink') {
+                            hasUnsafeImport = true;
+                            return;
+                        }
+                        importedNames.add(importName);
+                    });
+                    if (hasUnsafeImport) return false;
+                    continue;
+                }
+                const [defaultPart, namedPart] = clause.split('{');
+                if (defaultPart && defaultPart.trim()) {
+                    importedNames.add(defaultPart.trim().replace(/,$/, ''));
+                }
+                if (namedPart) {
+                    const names = namedPart
+                        .replace(/[{}]/g, '')
+                        .split(',')
+                        .map((v) => v.trim())
+                        .filter(Boolean);
+                    names.forEach((name) => {
+                        const parts = name.split(/\s+as\s+/i);
+                        const importName = (parts[1] || parts[0]).trim();
+                        if (normalizedSource === 'react-router-dom' && importName !== 'Link' && importName !== 'NavLink') {
+                            hasUnsafeImport = true;
+                            return;
+                        }
+                        importedNames.add(importName);
+                    });
+                    if (hasUnsafeImport) return false;
+                }
+            }
+
+            const declaredNames = new Set();
+            const declRegex = /\b(?:function|const|let|class)\s+([A-Z][A-Za-z0-9_]*)\b/g;
+            let declMatch;
+            while ((declMatch = declRegex.exec(input)) !== null) {
+                declaredNames.add(declMatch[1]);
+            }
+
+            const jsxNames = new Set();
+            const jsxRegex = /<([A-Z][A-Za-z0-9_]*)\b/g;
+            let jsxMatch;
+            while ((jsxMatch = jsxRegex.exec(input)) !== null) {
+                jsxNames.add(jsxMatch[1]);
+            }
+
+            const available = new Set([...declaredNames, ...importedNames, 'Footer']);
+            for (const name of jsxNames) {
+                if (!available.has(name)) return false;
+            }
+
+            return true;
+        };
+        const ensureSafeFooter = () => {
+            const footerPath = '/components/Footer.jsx';
+            if (!hasFile(footerPath)) {
+                setFile(footerPath, FALLBACK_FOOTER_CODE);
+                return;
+            }
+            const footerCode = toSandboxCode(next[footerPath]) || '';
+            if (!isFooterCodeSafe(footerCode)) {
+                setFile(footerPath, FALLBACK_FOOTER_CODE);
+            }
+        };
         const ensureDefaultExport = (path, componentName, fallbackCode) => {
             if (!hasFile(path)) {
                 setFile(path, fallbackCode);
@@ -753,17 +883,8 @@ function CodeView() {
             delete next['/App.css'];
         }
 
-        if (!isUpdateMode) ensureDefaultExport(
-            '/components/Footer.jsx',
-            'Footer',
-            `const Footer = () => (
-  <footer className="bg-gray-100 p-8 text-center text-gray-600 border-t mt-12">
-    ï¿½ ${new Date().getFullYear()} Project. All rights reserved.
-  </footer>
-);
-
-export default Footer;`
-        );
+        ensureDefaultExport('/components/Footer.jsx', 'Footer', FALLBACK_FOOTER_CODE);
+        ensureSafeFooter();
 
         if (!isUpdateMode) ensureDefaultExport(
             '/components/Navbar.jsx',
