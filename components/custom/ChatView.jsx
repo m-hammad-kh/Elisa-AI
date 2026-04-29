@@ -168,7 +168,7 @@ function ChatView() {
             {/* Chat messages */}
             <div 
                 ref={scrollRef}
-                className="flex-1 overflow-y-auto scrollbar-hide p-3 space-y-4 scroll-smooth"
+                className="relative flex-1 overflow-y-auto scrollbar-hide p-3 space-y-4 scroll-smooth"
             >
                 <div className="space-y-4">
                     {Array.isArray(messages) && messages?.filter(m => m.role !== 'command')?.map((msg, index) => (

@@ -40,7 +40,7 @@ function Provider({children}) {
 
   return (
     <div className={isWorkspace ? "h-screen flex flex-col overflow-hidden" : ""}>
-      <ClerkProvider publishableKey={clerkKey} signInUrl="/sign-in" signUpUrl="/sign-up" afterSignInUrl="/" afterSignUpUrl="/">
+      <ClerkProvider publishableKey={clerkKey} signInUrl="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/">
         <MessagesContext.Provider value={{messages,setMessages, selectedElement, setSelectedElement, chatOnly, setChatOnly}}>
           <NextThemesProvider
               attribute="class"
