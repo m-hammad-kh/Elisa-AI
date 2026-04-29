@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { model, CodeGenerationConfig, sendMessageWithRetry, fallbackModel } from "@/configs/AiModel";
+import { model, CodeGenerationConfig, sendMessageWithRetry } from "@/configs/AiModel";
 import { getPexelsImage } from "@/lib/pexels";
 
 const AI_TIMEOUT_MS = 70000;
@@ -801,33 +801,18 @@ export async function POST(req) {
     const effectivePrompt = enhancePromptForBetterGeneration(safePrompt);
 
     try {
-        let session = model.startChat({
+        const session = model.startChat({
             generationConfig: CodeGenerationConfig,
             history: [],
         });
 
         const finalPrompt = `${effectivePrompt}\n\n${SERVER_GENERATION_GUARDRAILS}`;
 
-        let result;
-        try {
-            result = await withTimeout(
-                sendMessageWithRetry(session, finalPrompt),
-                AI_TIMEOUT_MS,
-                "Generation"
-            );
-        } catch (retryError) {
-            console.error("Primary model failed in gen-ai-code, trying fallback...", retryError.message);
-            // Re-initialize session with fallback model
-            session = fallbackModel.startChat({
-                generationConfig: CodeGenerationConfig,
-                history: [],
-            });
-            result = await withTimeout(
-                sendMessageWithRetry(session, finalPrompt, 2),
-                AI_TIMEOUT_MS,
-                "Fallback Generation"
-            );
-        }
+        const result = await withTimeout(
+            sendMessageWithRetry(session, finalPrompt),
+            AI_TIMEOUT_MS,
+            "Generation"
+        );
 
         const jsonResponse = tryParseJson(result.response.text());
         if (!jsonResponse || typeof jsonResponse !== "object") {

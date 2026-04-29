@@ -3,20 +3,14 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// Using gemini-2.0-flash as a more stable alternative if 2.5-flash-lite is busy
-const PRIMARY_MODEL = "gemini-2.5-flash-lite";
-const FALLBACK_MODEL = "gemini-2.0-flash";
+const MODEL_NAME = "gemini-2.5-flash-lite";
 
 export const model = genAI.getGenerativeModel({
-    model: PRIMARY_MODEL,
-});
-
-export const fallbackModel = genAI.getGenerativeModel({
-    model: FALLBACK_MODEL,
+    model: MODEL_NAME,
 });
 
 /**
- * Helper to call Gemini with retry logic and model fallback
+ * Helper to call Gemini with retry logic
  */
 export async function sendMessageWithRetry(chatSession, prompt, maxRetries = 3) {
     let delay = 2000; // Start with 2s delay
@@ -34,10 +28,6 @@ export async function sendMessageWithRetry(chatSession, prompt, maxRetries = 3) 
                 delay *= 2;
                 continue;
             }
-            
-            // If it's a 503 and we've exhausted retries, or if it's a specific model error, 
-            // we could potentially try a different model here, but chatSession is bound to a model.
-            // So we handle model fallback at the route level if needed.
             throw error;
         }
     }

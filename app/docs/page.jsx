@@ -37,7 +37,7 @@ function DocsPage() {
             id: "architecture",
             title: "Technical Architecture",
             icon: <Layout className="w-6 h-6 text-primary" />,
-            content: "Elisa utilizes a modern serverless architecture built on Next.js and Convex. It leverages Google Gemini 2.0 Flash for code generation and Sandpack for in-browser project execution, providing a seamless bridge between visual design and raw code production."
+            content: "Elisa utilizes a modern serverless architecture built on Next.js and Convex. It leverages Google Gemini 2.5 Flash Lite for code generation and Sandpack for in-browser project execution, providing a seamless bridge between visual design and raw code production."
         }
     ];
 
