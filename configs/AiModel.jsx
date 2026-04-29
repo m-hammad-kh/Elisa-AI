@@ -19,14 +19,12 @@ export const fallbackModel = genAI.getGenerativeModel({
  * Helper to call Gemini with retry logic and model fallback
  */
 export async function sendMessageWithRetry(chatSession, prompt, maxRetries = 3) {
-    let lastError;
     let delay = 2000; // Start with 2s delay
 
     for (let i = 0; i < maxRetries; i++) {
         try {
             return await chatSession.sendMessage(prompt);
         } catch (error) {
-            lastError = error;
             const errorMsg = error.message || "";
             const isRetryable = errorMsg.includes("503") || errorMsg.includes("429") || errorMsg.includes("Service Unavailable") || errorMsg.includes("high demand");
 

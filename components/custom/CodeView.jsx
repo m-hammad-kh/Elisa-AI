@@ -1402,14 +1402,12 @@ export default Navbar;`
             const nextTitle = typeof result.data?.projectTitle === 'string'
                 ? result.data.projectTitle.trim()
                 : undefined;
-            if (userId) {
-                await UpdateFiles({
-                    workspaceId: id,
-                    userId,
-                    files: mergedFiles,
-                    title: nextTitle && nextTitle.length > 0 ? nextTitle : undefined
-                });
-            }
+            await UpdateFiles({
+                workspaceId: id,
+                userId,
+                files: mergedFiles,
+                title: nextTitle && nextTitle.length > 0 ? nextTitle : undefined
+            });
             setSandpackKey(prev => prev + 1);
         } catch (error) {
             console.error('GenerateAiCode Error:', error);
