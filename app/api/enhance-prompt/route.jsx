@@ -1,4 +1,4 @@
-import { model, EnhancePromptConfig } from "@/configs/AiModel";
+import { model, EnhancePromptConfig, sendMessageWithRetry, fallbackModel } from "@/configs/AiModel";
 import Prompt from "@/data/Prompt";
 import { NextResponse } from 'next/server';
 
@@ -6,15 +6,27 @@ export async function POST(request) {
     try {
         const { prompt } = await request.json();
         
-        const chatSession = model.startChat({
+        let chatSession = model.startChat({
             generationConfig: EnhancePromptConfig,
             history: [],
         });
 
-        const result = await chatSession.sendMessage([
+        const fullPrompt = [
             Prompt.ENHANCE_PROMPT_RULES,
             `Original prompt: ${prompt}`
-        ]);
+        ];
+
+        let result;
+        try {
+            result = await sendMessageWithRetry(chatSession, fullPrompt);
+        } catch (retryError) {
+            console.error("Primary model failed in enhance-prompt, trying fallback...", retryError.message);
+            chatSession = fallbackModel.startChat({
+                generationConfig: EnhancePromptConfig,
+                history: [],
+            });
+            result = await sendMessageWithRetry(chatSession, fullPrompt, 2);
+        }
         
         const text = result.response.text();
         

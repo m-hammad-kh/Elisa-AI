@@ -6,16 +6,16 @@ import { motion } from "framer-motion";
 import { useClerk, useUser } from "@clerk/clerk-react";
 import { useState, useEffect } from "react";
 
+const HERO_PHRASES = [
+  ["STOP", "THINKING", "START", "BUILDING"],
+  ["YOUR", "VISION", "OUR", "ENGINE"],
+  ["ONE", "PROMPT", "ONE", "WIN"],
+  ["NO", "CODE", "JUST", "MAGIC"]
+];
+
 function Hero() {
   const { user } = useUser();
   const { openSignIn } = useClerk();
-  
-  const phrases = [
-    ["STOP", "THINKING", "START", "BUILDING"],
-    ["YOUR", "VISION", "OUR", "ENGINE"],
-    ["ONE", "PROMPT", "ONE", "WIN"],
-    ["NO", "CODE", "JUST", "MAGIC"]
-  ];
 
   const [phraseIndex, setPhraseIndex] = useState(0);
   const [displayedWords, setDisplayedWords] = useState(["", "", "", ""]);
@@ -24,7 +24,7 @@ function Hero() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
-    const currentPhrase = phrases[phraseIndex];
+    const currentPhrase = HERO_PHRASES[phraseIndex];
     const currentWord = currentPhrase[wordIndex];
     
     let timer;
@@ -60,10 +60,10 @@ function Hero() {
           setCharIndex(prev => prev - 1);
         } else if (wordIndex > 0) {
           setWordIndex(prev => prev - 1);
-          setCharIndex(phrases[phraseIndex][wordIndex - 1].length);
+          setCharIndex(HERO_PHRASES[phraseIndex][wordIndex - 1].length);
         } else {
           setIsDeleting(false);
-          setPhraseIndex((prev) => (prev + 1) % phrases.length);
+          setPhraseIndex((prev) => (prev + 1) % HERO_PHRASES.length);
           setWordIndex(0);
           setCharIndex(0);
         }
@@ -264,6 +264,5 @@ function Hero() {
 }
 
 export default Hero;
-
 
 

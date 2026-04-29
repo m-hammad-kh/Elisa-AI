@@ -29,6 +29,175 @@ const toSandboxCode = (content) => {
   }
   return '';
 };
+const SAFE_FOOTER_CODE = `import React from "react";
+
+const footerLinks = [
+  { label: "Home", href: "/" },
+  { label: "About", href: "/about" },
+  { label: "Contact", href: "/contact" }
+];
+
+const Footer = () => {
+  return (
+    <footer className="mt-16 border-t border-white/10 bg-slate-950 text-slate-200">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10 md:flex-row md:items-start md:justify-between">
+        <div className="max-w-md">
+          <p className="text-xs font-black uppercase tracking-[0.35em] text-amber-400">Built With Elisa</p>
+          <h2 className="mt-3 text-2xl font-black tracking-tight text-white">Modern websites without the chaos.</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-400">
+            Clean, responsive, production-ready experiences generated for fast iteration and stable previewing.
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.3em] text-slate-500">Navigation</p>
+          <div className="mt-4 flex flex-col gap-3 text-sm">
+            {footerLinks.map((item) => (
+              <a key={item.label} href={item.href} className="text-slate-300 transition-colors duration-200 hover:text-white">
+                {item.label}
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="border-t border-white/10 px-6 py-4 text-xs text-slate-500">
+        © {new Date().getFullYear()} Elisa AI. All rights reserved.
+      </div>
+    </footer>
+  );
+};
+
+export default Footer;
+`;
+
+const repairMismatchedJsxTags = (input) => {
+  const code = typeof input === 'string' ? input : '';
+  const stack = [];
+  const voidTags = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+  return code.replace(/<\/?([A-Za-z][\w.:]*)\b[^>]*>/g, (tag) => {
+    const isClosing = tag.startsWith('</');
+    const match = tag.match(/^<\/?([A-Za-z][\w.:]*)/);
+    const tagName = match?.[1];
+    const isHtmlVoidTag = typeof tagName === 'string' && tagName === tagName.toLowerCase() && voidTags.has(tagName);
+    const isSelfClosing = /\/>$/.test(tag) || isHtmlVoidTag;
+
+    if (!tagName || isSelfClosing) return tag;
+
+    if (!isClosing) {
+      stack.push(tagName);
+      return tag;
+    }
+
+    if (stack.length === 0) return '';
+    const expected = stack.pop();
+    if (!expected) return '';
+    if (expected === tagName) return tag;
+    return tag.replace(tagName, expected);
+  });
+};
+
+const ensureLibraryImports = (input) => {
+  let code = typeof input === 'string' ? input : '';
+  const prependImport = (statement) => {
+    if (code.includes(statement.trim())) return;
+    const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+    if (useClientMatch) {
+      code = `${useClientMatch[0]}${statement}\n${code.slice(useClientMatch[0].length)}`;
+      return;
+    }
+    code = `${statement}\n${code}`;
+  };
+
+  const framerSymbols = ['motion', 'AnimatePresence'];
+  const usedFramerSymbols = framerSymbols.filter((symbol) => {
+    if (symbol === 'motion') return /\bmotion\./.test(code);
+    return new RegExp(`\\b${symbol}\\b|<${symbol}\\b`).test(code);
+  });
+  if (usedFramerSymbols.length > 0 && !/from\s+['"]framer-motion['"]/.test(code)) {
+    prependImport(`import { ${usedFramerSymbols.join(', ')} } from 'framer-motion';`);
+  }
+
+  const routerSymbols = ['BrowserRouter', 'Routes', 'Route', 'Link', 'NavLink', 'Navigate', 'Outlet', 'useNavigate', 'useLocation', 'useParams', 'useSearchParams'];
+  const usedRouterSymbols = routerSymbols.filter((symbol) => {
+    if (symbol.startsWith('use')) return new RegExp(`\\b${symbol}\\b`).test(code);
+    return new RegExp(`<${symbol}\\b|\\b${symbol}\\b`).test(code);
+  });
+  if (usedRouterSymbols.length > 0 && !/from\s+['"]react-router-dom['"]/.test(code)) {
+    prependImport(`import { ${usedRouterSymbols.join(', ')} } from 'react-router-dom';`);
+  }
+
+  return code;
+};
+
+const injectSafetyStubs = (input) => {
+  let code = typeof input === 'string' ? input : '';
+
+  const prependBlock = (block) => {
+    if (!block || code.includes(block.trim())) return;
+    const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+    if (useClientMatch) {
+      code = `${useClientMatch[0]}${block}\n${code.slice(useClientMatch[0].length)}`;
+      return;
+    }
+    code = `${block}\n${code}`;
+  };
+
+  if (/\bScrollTrigger\./.test(code) && !/\bconst\s+ScrollTrigger\b/.test(code)) {
+    prependBlock(`const ScrollTrigger = { defaults: () => {}, create: () => {}, refresh: () => {}, killAll: () => {} };`);
+  }
+  if (/\bgsap\./.test(code) && !/\bconst\s+gsap\b/.test(code)) {
+    prependBlock(`const gsap = { registerPlugin: () => {}, from: () => {}, to: () => {}, fromTo: () => {}, timeline: () => ({ from: () => {}, to: () => {}, fromTo: () => {} }) };`);
+  }
+  if (/from\s+['"]react-intersection-observer['"]/.test(code)) {
+    code = code.replace(/^\s*import\s+\{?\s*useInView\s*\}?\s+from\s+['"]react-intersection-observer['"];?\s*$/gm, '');
+  }
+  if (/\buseInView\s*\(/.test(code) && !/\bconst\s+useInView\b/.test(code)) {
+    prependBlock(`const useInView = () => {
+  const ref = () => {};
+  const result = [ref, true];
+  result.ref = ref;
+  result.inView = true;
+  result.entry = undefined;
+  return result;
+};`);
+  }
+
+  const definedNames = new Set();
+  const knownGlobals = new Set(['React', 'Fragment', 'Suspense', 'StrictMode', 'BrowserRouter', 'Routes', 'Route', 'Link', 'NavLink', 'Navigate', 'Outlet']);
+
+  for (const match of code.matchAll(/import\s+([A-Z][A-Za-z0-9_$]*)\s+from\b/g)) {
+    definedNames.add(match[1]);
+  }
+  for (const match of code.matchAll(/import\s+\{([^}]+)\}\s+from\b/g)) {
+    const names = match[1].split(',').map((part) => part.trim().split(/\s+as\s+/i).pop()).filter(Boolean);
+    names.forEach((name) => definedNames.add(name));
+  }
+  for (const match of code.matchAll(/\b(?:const|function|class)\s+([A-Z][A-Za-z0-9_$]*)\b/g)) {
+    definedNames.add(match[1]);
+  }
+
+  const usedComponentNames = new Set();
+  for (const match of code.matchAll(/<([A-Z][A-Za-z0-9_$]*)\b/g)) {
+    usedComponentNames.add(match[1]);
+  }
+
+  const isImportedSomewhere = (name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`import[\\s\\S]{0,240}\\b${escaped}\\b[\\s\\S]{0,240}from\\s+['"]`, 'm').test(code);
+  };
+
+  const unresolved = [...usedComponentNames].filter((name) => (
+    !definedNames.has(name) &&
+    !knownGlobals.has(name) &&
+    !isImportedSomewhere(name)
+  ));
+  if (unresolved.length > 0) {
+    const stubBlock = unresolved.map((name) => `const ${name} = () => null;`).join('\n');
+    prependBlock(stubBlock);
+  }
+
+  return code;
+};
 
 const fixUnsafeSandboxCode = (input) => {
   let code = typeof input === 'string' ? input : '';
@@ -68,6 +237,9 @@ const fixUnsafeSandboxCode = (input) => {
 
   // Fix new URL(null/undefined, ...) usage
   code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
+  code = repairMismatchedJsxTags(code);
+  code = ensureLibraryImports(code);
+  code = injectSafetyStubs(code);
   
   return code;
 };
@@ -105,7 +277,11 @@ export default function WorkspacePreviewPage() {
       const cleanPath = toSandboxPath(path);
       normalizedDefaults[cleanPath] = { code: fixUnsafeSandboxCode(toSandboxCode(content)) };
     });
-    return { ...normalizedDefaults, ...processed };
+    return {
+      ...normalizedDefaults,
+      ...processed,
+      '/components/Footer.jsx': { code: SAFE_FOOTER_CODE }
+    };
   }, [workspace?.fileData]);
 
   const template = 'react';

@@ -20,27 +20,30 @@ const PageTransition = ({ children }) => {
         prevPathnameRef.current = pathname;
 
         if (!shouldAnimate) {
-            setDisplayChildren(children);
-            setIsTransitioning(false);
-            setShouldShowContent(true);
+            prevChildrenRef.current = children;
             return;
         }
 
-        setIsTransitioning(true);
-        setShouldShowContent(false);
-        setDisplayChildren(prevChildrenRef.current);
+        let swapTimer;
+        let endTimer;
+        const frameId = requestAnimationFrame(() => {
+            setIsTransitioning(true);
+            setShouldShowContent(false);
+            setDisplayChildren(prevChildrenRef.current);
 
-        // Faster swap + reveal for better responsiveness
-        const swapTimer = setTimeout(() => {
-            setDisplayChildren(children);
-        }, 280);
+            // Faster swap + reveal for better responsiveness
+            swapTimer = setTimeout(() => {
+                setDisplayChildren(children);
+            }, 280);
 
-        const endTimer = setTimeout(() => {
-            setIsTransitioning(false);
-            setShouldShowContent(true);
-        }, 700);
+            endTimer = setTimeout(() => {
+                setIsTransitioning(false);
+                setShouldShowContent(true);
+            }, 700);
+        });
 
         return () => {
+            cancelAnimationFrame(frameId);
             clearTimeout(swapTimer);
             clearTimeout(endTimer);
         };

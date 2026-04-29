@@ -1,16 +1,28 @@
-import { model, generationConfig } from "@/configs/AiModel";
+import { model, generationConfig, sendMessageWithRetry, fallbackModel } from "@/configs/AiModel";
 import { NextResponse } from "next/server";
 
 export async function POST(req) {
     const { prompt } = await req.json();
 
     try {
-        const chatSession = model.startChat({
+        let chatSession = model.startChat({
             generationConfig,
             history: [],
         });
         
-        const result = await chatSession.sendMessage(prompt);
+        let result;
+        try {
+            result = await sendMessageWithRetry(chatSession, prompt);
+        } catch (retryError) {
+            // If primary model fails after retries, try fallback model
+            console.error("Primary model failed, trying fallback...", retryError.message);
+            chatSession = fallbackModel.startChat({
+                generationConfig,
+                history: [],
+            });
+            result = await sendMessageWithRetry(chatSession, prompt, 2);
+        }
+
         const AIResp = result.response.text();
 
         return NextResponse.json({ result: AIResp });

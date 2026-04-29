@@ -41,7 +41,9 @@ const isValidSandboxPath = (value) => {
         normalized !== 'null' && 
         normalized !== 'undefined' && 
         normalized !== '/null' && 
-        normalized !== '/undefined' && 
+        normalized !== '/undefined' &&
+        normalized !== 'unknown' &&
+        normalized !== '/unknown' &&
         normalized !== '[object object]'
     );
 };
@@ -63,6 +65,176 @@ const toSandboxCode = (content) => {
         return JSON.stringify(content, null, 2);
     }
     return '';
+};
+
+const fixClassContrast = (code) => {
+    const input = typeof code === 'string' ? code : '';
+    if (!input) return input;
+
+    const darkBg = /\bbg-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightBg = /\bbg-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50)\b/;
+    const darkText = /\btext-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
+    const lightText = /\btext-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50|gray-100|slate-100)\b/;
+
+    const fixClassValue = (value) => {
+        let v = value;
+        const hasAnyTextClass = /\btext-[^\s]+\b/.test(v);
+        if (darkBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-100`;
+        }
+        if (darkBg.test(v) && darkText.test(v)) {
+            v = v.replace(/\btext-black\b/g, 'text-white');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-9\d\d\b/g, 'text-slate-100');
+        }
+        if (lightBg.test(v) && !hasAnyTextClass) {
+            v = `${v} text-slate-900`;
+        }
+        if (lightBg.test(v) && lightText.test(v)) {
+            v = v.replace(/\btext-white\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-50\b/g, 'text-slate-900');
+            v = v.replace(/\btext-(gray|slate)-100\b/g, 'text-slate-900');
+        }
+        return v;
+    };
+
+    const rewriteAttr = (attr) => new RegExp(`\\b${attr}\\s*=\\s*"([^"]*)"`, 'g');
+    const rewriteAttrS = (attr) => new RegExp(`\\b${attr}\\s*=\\s*'([^']*)'`, 'g');
+
+    return input
+        .replace(rewriteAttr('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('className'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttr('class'), (m, v) => m.replace(v, fixClassValue(v)))
+        .replace(rewriteAttrS('class'), (m, v) => m.replace(v, fixClassValue(v)));
+};
+
+const repairMismatchedJsxTags = (input) => {
+    const code = typeof input === 'string' ? input : '';
+    const stack = [];
+    const voidTags = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+    return code.replace(/<\/?([A-Za-z][\w.:]*)\b[^>]*>/g, (tag) => {
+        const isClosing = tag.startsWith('</');
+        const match = tag.match(/^<\/?([A-Za-z][\w.:]*)/);
+        const tagName = match?.[1];
+        const isHtmlVoidTag = typeof tagName === 'string' && tagName === tagName.toLowerCase() && voidTags.has(tagName);
+        const isSelfClosing = /\/>$/.test(tag) || isHtmlVoidTag;
+
+        if (!tagName || isSelfClosing) return tag;
+
+        if (!isClosing) {
+            stack.push(tagName);
+            return tag;
+        }
+
+        if (stack.length === 0) return '';
+        const expected = stack.pop();
+        if (!expected) return '';
+        if (expected === tagName) return tag;
+        return tag.replace(tagName, expected);
+    });
+};
+
+const ensureLibraryImports = (input) => {
+    let code = typeof input === 'string' ? input : '';
+    const prependImport = (statement) => {
+        if (code.includes(statement.trim())) return;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            code = `${useClientMatch[0]}${statement}\n${code.slice(useClientMatch[0].length)}`;
+            return;
+        }
+        code = `${statement}\n${code}`;
+    };
+
+    const framerSymbols = ['motion', 'AnimatePresence'];
+    const usedFramerSymbols = framerSymbols.filter((symbol) => {
+        if (symbol === 'motion') return /\bmotion\./.test(code);
+        return new RegExp(`\\b${symbol}\\b|<${symbol}\\b`).test(code);
+    });
+    if (usedFramerSymbols.length > 0 && !/from\s+['"]framer-motion['"]/.test(code)) {
+        prependImport(`import { ${usedFramerSymbols.join(', ')} } from 'framer-motion';`);
+    }
+
+    const routerSymbols = ['BrowserRouter', 'Routes', 'Route', 'Link', 'NavLink', 'Navigate', 'Outlet', 'useNavigate', 'useLocation', 'useParams', 'useSearchParams'];
+    const usedRouterSymbols = routerSymbols.filter((symbol) => {
+        if (symbol.startsWith('use')) return new RegExp(`\\b${symbol}\\b`).test(code);
+        return new RegExp(`<${symbol}\\b|\\b${symbol}\\b`).test(code);
+    });
+    if (usedRouterSymbols.length > 0 && !/from\s+['"]react-router-dom['"]/.test(code)) {
+        prependImport(`import { ${usedRouterSymbols.join(', ')} } from 'react-router-dom';`);
+    }
+
+    return code;
+};
+
+const injectSafetyStubs = (input) => {
+    let code = typeof input === 'string' ? input : '';
+
+    const prependBlock = (block) => {
+        if (!block || code.includes(block.trim())) return;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            code = `${useClientMatch[0]}${block}\n${code.slice(useClientMatch[0].length)}`;
+            return;
+        }
+        code = `${block}\n${code}`;
+    };
+
+    if (/\bScrollTrigger\./.test(code) && !/\bconst\s+ScrollTrigger\b/.test(code)) {
+        prependBlock(`const ScrollTrigger = { defaults: () => {}, create: () => {}, refresh: () => {}, killAll: () => {} };`);
+    }
+    if (/\bgsap\./.test(code) && !/\bconst\s+gsap\b/.test(code)) {
+        prependBlock(`const gsap = { registerPlugin: () => {}, from: () => {}, to: () => {}, fromTo: () => {}, timeline: () => ({ from: () => {}, to: () => {}, fromTo: () => {} }) };`);
+    }
+    if (/from\s+['"]react-intersection-observer['"]/.test(code)) {
+        code = code.replace(/^\s*import\s+\{?\s*useInView\s*\}?\s+from\s+['"]react-intersection-observer['"];?\s*$/gm, '');
+    }
+    if (/\buseInView\s*\(/.test(code) && !/\bconst\s+useInView\b/.test(code)) {
+        prependBlock(`const useInView = () => {
+  const ref = () => {};
+  const result = [ref, true];
+  result.ref = ref;
+  result.inView = true;
+  result.entry = undefined;
+  return result;
+};`);
+    }
+
+    const definedNames = new Set();
+    const knownGlobals = new Set(['React', 'Fragment', 'Suspense', 'StrictMode', 'BrowserRouter', 'Routes', 'Route', 'Link', 'NavLink', 'Navigate', 'Outlet']);
+
+    for (const match of code.matchAll(/import\s+([A-Z][A-Za-z0-9_$]*)\s+from\b/g)) {
+        definedNames.add(match[1]);
+    }
+    for (const match of code.matchAll(/import\s+\{([^}]+)\}\s+from\b/g)) {
+        const names = match[1].split(',').map((part) => part.trim().split(/\s+as\s+/i).pop()).filter(Boolean);
+        names.forEach((name) => definedNames.add(name));
+    }
+    for (const match of code.matchAll(/\b(?:const|function|class)\s+([A-Z][A-Za-z0-9_$]*)\b/g)) {
+        definedNames.add(match[1]);
+    }
+
+    const usedComponentNames = new Set();
+    for (const match of code.matchAll(/<([A-Z][A-Za-z0-9_$]*)\b/g)) {
+        usedComponentNames.add(match[1]);
+    }
+
+    const isImportedSomewhere = (name) => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`import[\\s\\S]{0,240}\\b${escaped}\\b[\\s\\S]{0,240}from\\s+['"]`, 'm').test(code);
+    };
+
+    const unresolved = [...usedComponentNames].filter((name) => (
+        !definedNames.has(name) &&
+        !knownGlobals.has(name) &&
+        !isImportedSomewhere(name)
+    ));
+    if (unresolved.length > 0) {
+        const stubBlock = unresolved.map((name) => `const ${name} = () => null;`).join('\n');
+        prependBlock(stubBlock);
+    }
+
+    return code;
 };
 
 const fixUnsafeSandboxCode = (input) => {
@@ -119,8 +291,30 @@ const fixUnsafeSandboxCode = (input) => {
     code = code.replace(/(src|href|to|action|poster)\s*=\s*\{\s*(null|undefined|['"]['"])\s*\}/g, '$1="/"');
     code = code.replace(/(src|href|to|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
 
+    // Fix invalid JSX attribute paths (Route/Link)
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*(null|undefined)\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*\{\s*['"]\s*['"]\s*\}/g, '$1="/"');
+    code = code.replace(/\b(path|to|href|src|action|poster)\s*=\s*['"](null|undefined|)['"]/g, '$1="/"');
+
+    // Remove broken closing tags like "</n" before a valid closing tag
+    code = code.replace(/<\/n\s*(?=\n\s*<\/)/g, '');
+    code = code.replace(/<\/n\s*>/g, '');
+    // Even broader, but safe: keep only real tags like </nav> and </noscript>
+    code = code.replace(/<\/n(?!av\b|oscript\b)/gi, '');
+
+    // Fix common JSX corruption where a block closing tag is accidentally appended inside a <p> text node.
+    // Example: <p>... </motion.div>  => <p>...</p>\n</motion.div>
+    code = code.replace(/(<p\b[^>]*>[^<]*)(\s*)(<\/(?!p\b)[^>]+>)/g, '$1</p>\n$2$3');
+
     // Fix new URL(null/undefined, ...) usage
     code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
+
+    code = repairMismatchedJsxTags(code);
+    code = ensureLibraryImports(code);
+    code = injectSafetyStubs(code);
+
+    // Best-effort contrast fix for obviously unreadable combinations on the same element.
+    code = fixClassContrast(code);
 
     return code;
 };
@@ -129,6 +323,104 @@ const SANDBOX_EXTERNAL_RESOURCES = [
     'https://cdn.tailwindcss.com',
     'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css'
 ];
+const SAFE_FOOTER_CODE = `import React from "react";
+
+const footerLinks = [
+  { label: "Home", href: "/" },
+  { label: "About", href: "/about" },
+  { label: "Contact", href: "/contact" }
+];
+
+const Footer = () => {
+  return (
+    <footer className="mt-16 border-t border-white/10 bg-slate-950 text-slate-200">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10 md:flex-row md:items-start md:justify-between">
+        <div className="max-w-md">
+          <p className="text-xs font-black uppercase tracking-[0.35em] text-amber-400">Built With Elisa</p>
+          <h2 className="mt-3 text-2xl font-black tracking-tight text-white">Modern websites without the chaos.</h2>
+          <p className="mt-3 text-sm leading-6 text-slate-400">
+            Clean, responsive, production-ready experiences generated for fast iteration and stable previewing.
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.3em] text-slate-500">Navigation</p>
+          <div className="mt-4 flex flex-col gap-3 text-sm">
+            {footerLinks.map((item) => (
+              <a key={item.label} href={item.href} className="text-slate-300 transition-colors duration-200 hover:text-white">
+                {item.label}
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="border-t border-white/10 px-6 py-4 text-xs text-slate-500">
+        © {new Date().getFullYear()} Elisa AI. All rights reserved.
+      </div>
+    </footer>
+  );
+};
+
+export default Footer;
+`;
+const PREVIEW_ALLOWED_DEPENDENCIES = {
+    react: '^19.2.4',
+    'react-dom': '^19.2.4',
+    'framer-motion': 'latest',
+    'lucide-react': 'latest',
+    'react-router-dom': 'latest',
+    axios: 'latest',
+    clsx: 'latest',
+    'tailwind-merge': 'latest',
+    'tailwindcss-animate': 'latest'
+};
+const PREVIEW_DEPENDENCY_ALIASES = {
+    clx: 'clsx'
+};
+
+const STYLE_PRESETS = [
+    {
+        name: "Neo Brutalist Citrus",
+        palette: "charcoal #0f172a, citrus #f59e0b, mint #34d399, cream #fff7ed",
+        fonts: "Space Grotesk for headings, Manrope for body",
+        hero: "Split hero with bold left text and a large right image in an angled frame",
+        background: "Layered gradients with subtle grain texture",
+        accents: "Thick borders, pill buttons, high-contrast CTA"
+    },
+    {
+        name: "Modern Editorial",
+        palette: "ink #0b0f19, pearl #f8fafc, rose #fb7185, gold #fbbf24",
+        fonts: "Playfair Display for headings, Source Sans 3 for body",
+        hero: "Asymmetric hero with stacked text and a tall portrait image",
+        background: "Soft paper texture with oversized typography accents",
+        accents: "Underline links, thin rules, editorial cards"
+    },
+    {
+        name: "Coastal Tech",
+        palette: "navy #0b1f3a, teal #14b8a6, sky #38bdf8, sand #fde68a",
+        fonts: "Outfit for headings, Plus Jakarta Sans for body",
+        hero: "Wide hero with panoramic image and floating stat cards",
+        background: "Wave-like gradients with glass panels",
+        accents: "Rounded buttons, subtle glow highlights"
+    },
+    {
+        name: "Retro Future",
+        palette: "black #0a0a0a, electric #7c3aed, neon #22d3ee, lime #a3e635",
+        fonts: "Sora for headings, Space Mono for labels",
+        hero: "Centered hero with layered image collage and neon ring",
+        background: "Grid pattern with glowing gradients",
+        accents: "Neon borders, hover glows, animated pills"
+    },
+    {
+        name: "Warm Minimal",
+        palette: "espresso #1f1b16, terracotta #f97316, clay #fed7aa, olive #84a98c",
+        fonts: "DM Serif Display for headings, Work Sans for body",
+        hero: "Two-column hero with clean image and stacked CTA buttons",
+        background: "Soft radial gradients with warm tint",
+        accents: "Subtle shadows, rounded corners, calm spacing"
+    }
+];
+
+const pickStylePreset = () => STYLE_PRESETS[Math.floor(Math.random() * STYLE_PRESETS.length)];
 
 const MAX_PROMPT_MESSAGE_CHARS = 22000;
 const MAX_PROMPT_FILES_CHARS = 420000;
@@ -324,6 +616,7 @@ function CodeView() {
     const [historyIndex, setHistoryIndex] = useState(0);
     const [sandpackKey, setSandpackKey] = useState(0); // For forcing remount
     const sandpackFilesRef = useRef(files);
+    const generationInFlightRef = useRef(false);
     const skipInitialGenerateRef = useRef(false);
     const hasPersistedFilesRef = useRef(false);
     const [filesLoaded, setFilesLoaded] = useState(false);
@@ -597,6 +890,68 @@ function CodeView() {
         const setFile = (path, content) => {
             next[path] = { code: fixUnsafeSandboxCode(toSandboxCode(content)) };
         };
+        const ensurePackageJson = () => {
+            const fallbackPackage = {
+                name: 'generated-project',
+                private: true,
+                version: '1.0.0',
+                type: 'module',
+                scripts: {
+                    dev: 'vite',
+                    build: 'vite build',
+                    preview: 'vite preview'
+                },
+                dependencies: PREVIEW_ALLOWED_DEPENDENCIES,
+                devDependencies: {
+                    vite: 'latest',
+                    '@vitejs/plugin-react': 'latest'
+                }
+            };
+
+            if (!hasFile('/package.json')) {
+                setFile('/package.json', JSON.stringify(fallbackPackage, null, 2));
+                return;
+            }
+
+            try {
+                const parsed = JSON.parse(toSandboxCode(next['/package.json']) || '{}');
+                const rawDependencies = parsed?.dependencies && typeof parsed.dependencies === 'object'
+                    ? parsed.dependencies
+                    : {};
+                const sanitizedDependencies = {};
+
+                Object.entries(rawDependencies).forEach(([name, version]) => {
+                    const normalizedName = PREVIEW_DEPENDENCY_ALIASES[name] || name;
+                    if (!Object.prototype.hasOwnProperty.call(PREVIEW_ALLOWED_DEPENDENCIES, normalizedName)) {
+                        return;
+                    }
+                    sanitizedDependencies[normalizedName] = version;
+                });
+
+                const normalized = {
+                    ...parsed,
+                    private: true,
+                    version: parsed?.version || '1.0.0',
+                    type: parsed?.type || 'module',
+                    scripts: {
+                        dev: 'vite',
+                        build: 'vite build',
+                        preview: 'vite preview',
+                        ...(parsed?.scripts || {})
+                    },
+                    dependencies: {
+                        ...fallbackPackage.dependencies,
+                        ...sanitizedDependencies
+                    },
+                    devDependencies: {
+                        ...fallbackPackage.devDependencies
+                    }
+                };
+                setFile('/package.json', JSON.stringify(normalized, null, 2));
+            } catch (e) {
+                setFile('/package.json', JSON.stringify(fallbackPackage, null, 2));
+            }
+        };
         const ensureDefaultExport = (path, componentName, fallbackCode) => {
             if (!hasFile(path)) {
                 setFile(path, fallbackCode);
@@ -609,6 +964,8 @@ function CodeView() {
                 return;
             }
 
+            code = code.replace(new RegExp(`import\\s+\\{\\s*${componentName}\\s*\\}\\s+from\\s+['"][^'"]+['"];?`, 'g'), '');
+
             const hasDeclaration = new RegExp(`\\b(function|const|class)\\s+${componentName}\\b`).test(code);
             if (hasDeclaration) {
                 code = `${code}\n\nexport default ${componentName};`;
@@ -616,8 +973,26 @@ function CodeView() {
                 return;
             }
 
-            const merged = `${code}\n\n${fallbackCode}`.trim();
-            setFile(path, merged);
+            // If the file has substantial JSX content (AI-generated component),
+            // just wrap it in a default export instead of appending fallback code.
+            // This prevents overwriting AI-generated footers/navbars with generic defaults.
+            const trimmedCode = code.trim();
+            if (trimmedCode.length > 50 && (trimmedCode.includes('<') || trimmedCode.includes('return'))) {
+                // Try to find any function/arrow component and export it
+                const anyFuncMatch = trimmedCode.match(/(?:const|function|let|var)\s+(\w+)/);
+                if (anyFuncMatch) {
+                    code = `${code}\n\nexport default ${anyFuncMatch[1]};`;
+                    setFile(path, code);
+                    return;
+                }
+                // Last resort: wrap the entire code as a default export component
+                code = `import React from 'react';\n\nconst ${componentName} = () => {\n${code}\n};\n\nexport default ${componentName};`;
+                setFile(path, code);
+                return;
+            }
+
+            // Only use fallback for truly empty or broken files
+            setFile(path, fallbackCode);
         };
 
         // If we have both .jsx and .js for the same component, prefer the .jsx and delete the .js to avoid duplication/conflicts
@@ -658,6 +1033,8 @@ function CodeView() {
 export default Footer;`
         );
 
+        setFile('/components/Footer.jsx', SAFE_FOOTER_CODE);
+
         ensureDefaultExport(
             '/components/Navbar.jsx',
             'Navbar',
@@ -674,11 +1051,171 @@ export default Footer;`
 
 export default Navbar;`
         );
+
+        // Ensure Navbar/Footer exist AND are rendered in App.jsx (models sometimes forget to mount them)
+        const ensureNavbarFooterInApp = () => {
+            if (!hasFile('/App.jsx')) return;
+            if (!hasFile('/components/Navbar.jsx') || !hasFile('/components/Footer.jsx')) return;
+
+            let out = toSandboxCode(next['/App.jsx']) || '';
+            if (!out.trim()) return;
+
+            const needsNavbar = !out.includes('<Navbar');
+            const needsFooter = !out.includes('<Footer');
+            if (!needsNavbar && !needsFooter) return;
+
+            const ensureImport = (name) => {
+                if (new RegExp(`\\bimport\\s+${name}\\b`).test(out)) return;
+                const stmt = `import ${name} from "./components/${name}.jsx";\n`;
+                if (/^import\s.+/m.test(out)) {
+                    out = out.replace(/^(?:import[^\n]*\n)+/m, (m) => m + stmt);
+                } else {
+                    out = stmt + out;
+                }
+            };
+
+            if (needsNavbar) ensureImport('Navbar');
+            if (needsFooter) ensureImport('Footer');
+            out = out.replace(/import\s+\{\s*Navbar\s*\}\s+from\s+(['"][^'"]+['"]);?/g, 'import Navbar from $1;');
+            out = out.replace(/import\s+\{\s*Footer\s*\}\s+from\s+(['"][^'"]+['"]);?/g, 'import Footer from $1;');
+
+            // Preferred: if BrowserRouter exists, mount inside it so Links work.
+            if (out.includes('<BrowserRouter')) {
+                if (needsNavbar) {
+                    out = out.replace(/(<BrowserRouter[^>]*>)/m, `$1\n      <Navbar />`);
+                }
+                if (needsFooter) {
+                    out = out.replace(/(<\/BrowserRouter>)/m, `      <Footer />\n    $1`);
+                }
+                setFile('/App.jsx', out);
+                return;
+            }
+
+            // Fallback: wrap returned JSX in a fragment and add Navbar/Footer around it.
+            const returnMatch = /return\s*\(/m.exec(out);
+            const closeIdx = out.lastIndexOf(');');
+            if (!returnMatch || closeIdx === -1) {
+                // Handle common pattern: `return <div>...</div>;` (no parentheses)
+                const returnIdx = out.indexOf('return');
+                if (returnIdx !== -1) {
+                    const semiIdx = out.indexOf(';', returnIdx);
+                    if (semiIdx !== -1) {
+                        const stmt = out.slice(returnIdx, semiIdx + 1);
+                        if (/return\s*</m.test(stmt)) {
+                            let injectedStmt = stmt;
+                            const firstGt = injectedStmt.indexOf('>');
+                            const lastClose = injectedStmt.lastIndexOf('</');
+                            if (firstGt !== -1 && lastClose !== -1 && lastClose > firstGt) {
+                                if (needsNavbar) {
+                                    injectedStmt = injectedStmt.slice(0, firstGt + 1) + `\n    <Navbar />` + injectedStmt.slice(firstGt + 1);
+                                }
+                                if (needsFooter) {
+                                    const lastClose2 = injectedStmt.lastIndexOf('</');
+                                    injectedStmt = injectedStmt.slice(0, lastClose2) + `\n    <Footer />\n  ` + injectedStmt.slice(lastClose2);
+                                }
+                                out = out.slice(0, returnIdx) + injectedStmt + out.slice(semiIdx + 1);
+                                setFile('/App.jsx', out);
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                setFile('/App.jsx', out);
+                return;
+            }
+
+            const openIdx = returnMatch.index + returnMatch[0].length;
+            const before = out.slice(0, openIdx);
+            const body = out.slice(openIdx, closeIdx);
+            const after = out.slice(closeIdx); // includes ');
+
+            const injected = [
+                '\n    <>',
+                needsNavbar ? '      <Navbar />' : null,
+                body.trimEnd(),
+                needsFooter ? '      <Footer />' : null,
+                '    </>\n  '
+            ].filter(Boolean).join('\n');
+
+            out = before + injected + after;
+            setFile('/App.jsx', out);
+        };
+
+        ensureNavbarFooterInApp();
+
+        // Fix BrowserRouter: ensure index.jsx wraps App in BrowserRouter when react-router-dom is used
+        const ensureBrowserRouter = () => {
+            if (!hasFile('/index.jsx')) return;
+
+            // Check if any file uses react-router-dom features
+            const routerPatterns = ['<Link', '<NavLink', '<Route', '<Routes', 'useNavigate', 'useLocation', 'useParams', 'useSearchParams', '<Navigate'];
+            let usesRouter = false;
+            Object.entries(next).forEach(([path, content]) => {
+                if (path === '/index.jsx') return; // skip index itself
+                const code = toSandboxCode(content) || '';
+                if (routerPatterns.some(p => code.includes(p))) {
+                    usesRouter = true;
+                }
+            });
+
+            if (!usesRouter) return;
+
+            let indexCode = toSandboxCode(next['/index.jsx']) || '';
+
+            // If index.jsx already has BrowserRouter, we're good
+            if (indexCode.includes('BrowserRouter')) return;
+
+            // Add BrowserRouter import
+            if (!indexCode.includes('react-router-dom')) {
+                const importLine = `import { BrowserRouter } from 'react-router-dom';\n`;
+                const lastImport = indexCode.lastIndexOf('import ');
+                if (lastImport !== -1) {
+                    const endOfLine = indexCode.indexOf('\n', lastImport);
+                    indexCode = indexCode.slice(0, endOfLine + 1) + importLine + indexCode.slice(endOfLine + 1);
+                } else {
+                    indexCode = importLine + indexCode;
+                }
+            }
+
+            // Wrap <App /> in <BrowserRouter>
+            indexCode = indexCode
+                .replace(/(\s*)<App\s*\/>/m, '$1<BrowserRouter>\n$1  <App />\n$1</BrowserRouter>');
+
+            setFile('/index.jsx', indexCode);
+
+            // Remove BrowserRouter from App.jsx if it's now in index.jsx (prevent double-wrap)
+            if (hasFile('/App.jsx')) {
+                let appCode = toSandboxCode(next['/App.jsx']) || '';
+                if (appCode.includes('<BrowserRouter')) {
+                    // Remove BrowserRouter wrapper but keep its children
+                    appCode = appCode.replace(/<BrowserRouter[^>]*>/g, '');
+                    appCode = appCode.replace(/<\/BrowserRouter>/g, '');
+                    // Remove the BrowserRouter import line
+                    appCode = appCode.replace(/^\s*import\s+\{[^}]*BrowserRouter[^}]*\}\s+from\s+['"]react-router-dom['"];?\s*\n?/m, (match) => {
+                        // Keep other imports from the same line if any besides BrowserRouter
+                        const otherImports = match.replace(/BrowserRouter\s*,?\s*/g, '').replace(/,\s*\}/g, '}');
+                        const remaining = otherImports.match(/\{\s*([^}]+)\s*\}/);
+                        if (remaining && remaining[1].trim().length > 0) {
+                            return otherImports;
+                        }
+                        return '';
+                    });
+                    setFile('/App.jsx', appCode);
+                }
+            }
+        };
+
+        ensureBrowserRouter();
         
         // Final sanity check for entry points
         if (!hasFile('/index.html')) {
             setFile('/index.html', Lookup.DEFAULT_FILE['/index.html'].code);
         }
+        if (!hasFile('/styles.css')) {
+            setFile('/styles.css', `:root { color-scheme: light dark; }\nhtml, body { height: 100%; }\nbody { margin: 0; background: #0b1220; color: #e5e7eb; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }\n`);
+        }
+        ensurePackageJson();
 
         return next;
     }, []);
@@ -734,6 +1271,8 @@ export default Navbar;`
     }, [id, isLoaded, GetFiles])
 
     const GenerateAiCode = useCallback(async () => {
+        if (loading || generationInFlightRef.current || !id || !userId) return;
+        generationInFlightRef.current = true;
         setLoading(true);
         
         // Count user messages to determine if this is an update
@@ -786,6 +1325,7 @@ export default Navbar;`
         const currentFiles = sandpackFilesRef.current && Object.keys(sandpackFilesRef.current).length > 0
             ? sandpackFilesRef.current
             : files;
+        const stylePreset = !isUpdate ? pickStylePreset() : null;
         
         let currentFilesToSync = preprocessFiles(currentFiles);
         const promptFilesResult = buildPromptFiles(currentFilesToSync, activeEditorFile);
@@ -798,6 +1338,16 @@ export default Navbar;`
         };
 
         let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        if (!isUpdate && stylePreset) {
+            PROMPT += `\n\n DESIGN VARIATION SEED (MANDATORY):
+- Theme: ${stylePreset.name}
+- Palette: ${stylePreset.palette}
+- Font pairing: ${stylePreset.fonts} (include Google Fonts link or @import)
+- Hero layout: ${stylePreset.hero}
+- Background treatment: ${stylePreset.background}
+- Accent details: ${stylePreset.accents}
+\n\n HERO IMAGE REQUIREMENT: The hero section MUST include at least one prominent image using the required Pexels search URL pattern (landscape).`;
+        }
         if (promptFilesResult.useCompression) {
             PROMPT += "\n\n NOTE: Some files were truncated or omitted from content. Use fileIndex for awareness and avoid rewriting unrelated files.";
         }
@@ -821,11 +1371,14 @@ export default Navbar;`
                 prompt: PROMPT,
                 existingFiles: cleanFiles
             }, {
-                timeout: 80000
+                timeout: 85000
             });
 
             if (result.data?.error) {
                 throw new Error(result.data.error);
+            }
+            if (!result.data?.files || typeof result.data.files !== 'object') {
+                throw new Error('Generator returned no usable files.');
             }
 
             const processedAiFiles = preprocessFiles(result.data?.files || {});
@@ -860,15 +1413,21 @@ export default Navbar;`
             setSandpackKey(prev => prev + 1);
         } catch (error) {
             console.error('GenerateAiCode Error:', error);
+            const status = error?.response?.status;
             const isTimeout = error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '');
             const errorMsg = error?.response?.data?.error || error?.message || 'Unknown error occurred';
-            alert(isTimeout
-                ? "Generation timed out (~80s max). Please try again. If it keeps timing out, shorten the request or try again in a minute."
-                : "Error generating code: " + errorMsg);
+            alert(
+                status === 429
+                    ? "AI rate limit hit ho gaya hai. 20-40 seconds baad dubara try karo."
+                    : isTimeout
+                        ? "Generation timed out before the AI returned valid code. Please try a shorter prompt."
+                        : "Error generating code: " + errorMsg
+            );
         } finally {
+            generationInFlightRef.current = false;
             setLoading(false);
         }
-    }, [id, messages, files, historyIndex, preprocessFiles, pickActiveEditorFile, normalizeGeneratedFiles, UpdateFiles, userId, activeEditorFile]);
+    }, [id, messages, files, historyIndex, preprocessFiles, pickActiveEditorFile, normalizeGeneratedFiles, UpdateFiles, userId, activeEditorFile, loading]);
 
     useEffect(() => {
         if (!filesLoaded) return;
