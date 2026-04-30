@@ -869,7 +869,10 @@ function CodeView() {
                 }
             }
 
-            const code = fixUnsafeSandboxCode(toSandboxCode(content));
+            const rawCode = toSandboxCode(content);
+            if (!rawCode || typeof rawCode !== 'string' || rawCode.length < 5) return; // Skip empty/broken files
+
+            const code = fixUnsafeSandboxCode(rawCode);
             processed[cleanPath] = { code };
         });
         return processed;
@@ -960,13 +963,17 @@ function CodeView() {
 
             let code = toSandboxCode(next[path]) || '';
             if (/\bexport\s+default\b/.test(code)) {
-                setFile(path, code);
-                return;
+                // Check if it's exporting the right name
+                if (new RegExp(`export\\s+default\\s+${componentName}`).test(code)) {
+                    setFile(path, code);
+                    return;
+                }
             }
 
+            // Remove incorrect curly imports of the same component
             code = code.replace(new RegExp(`import\\s+\\{\\s*${componentName}\\s*\\}\\s+from\\s+['"][^'"]+['"];?`, 'g'), '');
 
-            const hasDeclaration = new RegExp(`\\b(function|const|class)\\s+${componentName}\\b`).test(code);
+            const hasDeclaration = new RegExp(`\\b(function|const|class|let|var)\\s+${componentName}\\b`).test(code);
             if (hasDeclaration) {
                 code = `${code}\n\nexport default ${componentName};`;
                 setFile(path, code);
@@ -975,18 +982,17 @@ function CodeView() {
 
             // If the file has substantial JSX content (AI-generated component),
             // just wrap it in a default export instead of appending fallback code.
-            // This prevents overwriting AI-generated footers/navbars with generic defaults.
             const trimmedCode = code.trim();
-            if (trimmedCode.length > 50 && (trimmedCode.includes('<') || trimmedCode.includes('return'))) {
+            if (trimmedCode.length > 30 && (trimmedCode.includes('<') || trimmedCode.includes('return'))) {
                 // Try to find any function/arrow component and export it
-                const anyFuncMatch = trimmedCode.match(/(?:const|function|let|var)\s+(\w+)/);
+                const anyFuncMatch = trimmedCode.match(/(?:const|function|let|var)\s+([A-Z]\w+)/);
                 if (anyFuncMatch) {
                     code = `${code}\n\nexport default ${anyFuncMatch[1]};`;
                     setFile(path, code);
                     return;
                 }
                 // Last resort: wrap the entire code as a default export component
-                code = `import React from 'react';\n\nconst ${componentName} = () => {\n${code}\n};\n\nexport default ${componentName};`;
+                code = `import React from 'react';\n\nconst ${componentName} = () => {\n  return (\n    ${trimmedCode.startsWith('<') ? trimmedCode : `<>${trimmedCode}</>`}\n  );\n};\n\nexport default ${componentName};`;
                 setFile(path, code);
                 return;
             }
@@ -1058,7 +1064,7 @@ export default Navbar;`
             if (!hasFile('/components/Navbar.jsx') || !hasFile('/components/Footer.jsx')) return;
 
             let out = toSandboxCode(next['/App.jsx']) || '';
-            if (!out.trim()) return;
+            if (!out.trim() || out.length < 20) return;
 
             const needsNavbar = !out.includes('<Navbar');
             const needsFooter = !out.includes('<Footer');
@@ -1092,54 +1098,27 @@ export default Navbar;`
             }
 
             // Fallback: wrap returned JSX in a fragment and add Navbar/Footer around it.
-            const returnMatch = /return\s*\(/m.exec(out);
-            const closeIdx = out.lastIndexOf(');');
-            if (!returnMatch || closeIdx === -1) {
-                // Handle common pattern: `return <div>...</div>;` (no parentheses)
-                const returnIdx = out.indexOf('return');
-                if (returnIdx !== -1) {
-                    const semiIdx = out.indexOf(';', returnIdx);
-                    if (semiIdx !== -1) {
-                        const stmt = out.slice(returnIdx, semiIdx + 1);
-                        if (/return\s*</m.test(stmt)) {
-                            let injectedStmt = stmt;
-                            const firstGt = injectedStmt.indexOf('>');
-                            const lastClose = injectedStmt.lastIndexOf('</');
-                            if (firstGt !== -1 && lastClose !== -1 && lastClose > firstGt) {
-                                if (needsNavbar) {
-                                    injectedStmt = injectedStmt.slice(0, firstGt + 1) + `\n    <Navbar />` + injectedStmt.slice(firstGt + 1);
-                                }
-                                if (needsFooter) {
-                                    const lastClose2 = injectedStmt.lastIndexOf('</');
-                                    injectedStmt = injectedStmt.slice(0, lastClose2) + `\n    <Footer />\n  ` + injectedStmt.slice(lastClose2);
-                                }
-                                out = out.slice(0, returnIdx) + injectedStmt + out.slice(semiIdx + 1);
-                                setFile('/App.jsx', out);
-                                return;
-                            }
-                        }
+            const returnMatch = /return\s*\(\s*(<[\s\S]*>)\s*\)/m.exec(out) || /return\s*(<[\s\S]*>);/m.exec(out);
+            if (returnMatch) {
+                const fullReturn = returnMatch[0];
+                const innerContent = returnMatch[1];
+                
+                let updatedInner = innerContent;
+                if (needsNavbar && !updatedInner.includes('<Navbar')) {
+                    updatedInner = `<>\n      <Navbar />\n      ${updatedInner}\n    </>`;
+                }
+                if (needsFooter && !updatedInner.includes('<Footer')) {
+                    // If we already added a fragment for Navbar, just append Footer inside it
+                    if (updatedInner.startsWith('<>')) {
+                        updatedInner = updatedInner.replace(/<\/>$/, `  <Footer />\n    </>`);
+                    } else {
+                        updatedInner = `<>\n      ${updatedInner}\n      <Footer />\n    </>`;
                     }
                 }
-
+                
+                out = out.replace(fullReturn, `return (\n    ${updatedInner}\n  );`);
                 setFile('/App.jsx', out);
-                return;
             }
-
-            const openIdx = returnMatch.index + returnMatch[0].length;
-            const before = out.slice(0, openIdx);
-            const body = out.slice(openIdx, closeIdx);
-            const after = out.slice(closeIdx); // includes ');
-
-            const injected = [
-                '\n    <>',
-                needsNavbar ? '      <Navbar />' : null,
-                body.trimEnd(),
-                needsFooter ? '      <Footer />' : null,
-                '    </>\n  '
-            ].filter(Boolean).join('\n');
-
-            out = before + injected + after;
-            setFile('/App.jsx', out);
         };
 
         ensureNavbarFooterInApp();
@@ -1276,20 +1255,26 @@ export default Navbar;`
         setLoading(true);
         
         // Count user messages to determine if this is an update
-        const userMessagesCount = messages.filter(m => m.role === 'user').length;
+        const userMessages = messages.filter(m => m.role === 'user');
+        const userMessagesCount = userMessages.length;
         const isUpdate = userMessagesCount > 1;
 
+        // Detect if the latest message is an error report
+        const latestUserMsg = userMessages[userMessagesCount - 1];
+        const errorKeywords = ['error', 'fail', 'crash', 'not working', 'issue', 'bug', 'exception', 'stack trace', 'cannot find', 'is not defined'];
+        const isErrorReport = latestUserMsg && errorKeywords.some(word => 
+            latestUserMsg.content.toLowerCase().includes(word) || 
+            (latestUserMsg.technicalContent && latestUserMsg.technicalContent.toLowerCase().includes(word))
+        );
+
         // Clean messages to avoid sending redundant huge code blocks
-        // BUT keep enough context for updates
         const cleanMessages = messages
               .filter(msg => msg.role !== 'command')
-              .map(msg => {
+              .map((msg, idx) => {
                   const contentToUse = msg.technicalContent || msg.content;
                   if (msg.role === 'ai') {
                     try {
                         const parsed = JSON.parse(msg.content);
-                        // For AI messages, we send the explanation. 
-                        // The actual code is sent separately in the 'Current Code Files' block
                         return {
                             role: 'ai',
                             content: parsed.explanation || "Updated the project based on your request."
@@ -1297,10 +1282,21 @@ export default Navbar;`
                     } catch (e) {
                         return {
                             role: 'ai',
-                            content: msg.content.substring(0, 500)
+                            content: typeof msg.content === 'string' ? msg.content.substring(0, 500) : "AI response"
                         };
                     }
                 }
+                  
+                  // For the very first user message, keep it full as it's the core requirement
+                  // For subsequent messages, if they are not the latest, truncate them if they are too long
+                  const isLatest = idx === messages.length - 1;
+                  const isFirstUser = messages.findIndex(m => m.role === 'user') === idx;
+                  
+                  let finalContent = contentToUse;
+                  if (!isLatest && !isFirstUser && finalContent.length > 2000) {
+                      finalContent = finalContent.substring(0, 2000) + "... [truncated context]";
+                  }
+
                   if (msg.role === 'user' && msg.selectedElement) {
                       const targetHint = formatSelectedElement(msg.selectedElement);
                       return {
@@ -1308,20 +1304,20 @@ export default Navbar;`
                           content: [
                               `TARGET ELEMENT: ${targetHint}`,
                               'INSTRUCTION: Only update this element or its nearest relevant section. Do not change other sections, layout, or styling.',
-                              `USER REQUEST: ${contentToUse}`
+                              `USER REQUEST: ${finalContent}`
                           ].join('\n')
                       };
                   }
                   return {
                       role: msg.role,
-                      content: contentToUse
+                      content: finalContent
                   };
               });
+
         const compressedMessages = compressMessagesForPrompt(cleanMessages);
         const trimmedMessages = trimMessagesForPrompt(compressedMessages);
 
         // CRITICAL: Use the most up-to-date files from Sandpack internal state if available
-        // This ensures AI updates include manual edits even if they haven't synced to DB yet
         const currentFiles = sandpackFilesRef.current && Object.keys(sandpackFilesRef.current).length > 0
             ? sandpackFilesRef.current
             : files;
@@ -1338,6 +1334,11 @@ export default Navbar;`
         };
 
         let PROMPT = JSON.stringify(trimmedMessages) + "\n\n Current Code Files Structure: " + JSON.stringify(promptPayload) + "\n\n" + Prompt.CODE_GEN_PROMPT;
+        
+        if (isErrorReport) {
+            PROMPT += "\n\n CRITICAL: The user is reporting an ERROR or ISSUE in the code. Your primary goal is to DEBUG and FIX the reported issue. Analyze the provided error logs/description and the current code structure to identify and resolve the root cause.";
+        }
+
         if (!isUpdate && stylePreset) {
             PROMPT += `\n\n DESIGN VARIATION SEED (MANDATORY):
 - Theme: ${stylePreset.name}
@@ -1348,9 +1349,11 @@ export default Navbar;`
 - Accent details: ${stylePreset.accents}
 \n\n HERO IMAGE REQUIREMENT: The hero section MUST include at least one prominent image using the required Pexels search URL pattern (landscape).`;
         }
+        
         if (promptFilesResult.useCompression) {
             PROMPT += "\n\n NOTE: Some files were truncated or omitted from content. Use fileIndex for awareness and avoid rewriting unrelated files.";
         }
+
         const latestTargetedMessage = [...messages].reverse().find((msg) => msg.role === 'user' && msg.selectedElement);
         const targetedHint = latestTargetedMessage?.selectedElement
             ? formatSelectedElement(latestTargetedMessage.selectedElement)
@@ -1369,9 +1372,10 @@ export default Navbar;`
         try {
             const result = await axios.post('/api/gen-ai-code', {
                 prompt: PROMPT,
-                existingFiles: cleanFiles
+                existingFiles: cleanFiles,
+                isUpdate: isUpdate
             }, {
-                timeout: 85000
+                timeout: 95000 // Increased timeout for complex updates
             });
 
             if (result.data?.error) {
@@ -1383,14 +1387,21 @@ export default Navbar;`
 
             const processedAiFiles = preprocessFiles(result.data?.files || {});
             
-            // Merge AI generated files with current files. 
-            // We prioritize AI files, then current files, and only use DEFAULT_FILE as a base for missing essentials.
+            // BULLETPROOF MERGING:
+            // 1. Start with the current files to preserve everything.
+            // 2. Overwrite with AI generated files.
+            // 3. Normalize to ensure essentials (Navbar, Footer, index.html) exist.
             const mergedFiles = normalizeGeneratedFiles({ 
-                ...Lookup.DEFAULT_FILE, 
                 ...currentFilesToSync, 
                 ...processedAiFiles 
             });
             
+            // SAFETY CHECK: If the AI returned an empty or nearly empty project during an update, 
+            // we prevent it from being set as the state.
+            if (isUpdate && Object.keys(processedAiFiles).length < 2 && Object.keys(mergedFiles).length > 5) {
+                console.warn("AI returned suspiciously small update payload. Merging carefully.");
+            }
+
             setFiles(mergedFiles);
             setActiveEditorFile(pickActiveEditorFile(mergedFiles));
             setHistory(prev => {
@@ -1408,7 +1419,12 @@ export default Navbar;`
                 files: mergedFiles,
                 title: nextTitle && nextTitle.length > 0 ? nextTitle : undefined
             });
-            setSandpackKey(prev => prev + 1);
+            // Only reset Sandpack if the file list actually changed in structure or critical content
+            const oldFileKeys = Object.keys(files).sort().join(',');
+            const newFileKeys = Object.keys(mergedFiles).sort().join(',');
+            if (oldFileKeys !== newFileKeys || isErrorReport) {
+                setSandpackKey(prev => prev + 1);
+            }
         } catch (error) {
             console.error('GenerateAiCode Error:', error);
             const status = error?.response?.status;
@@ -1456,12 +1472,15 @@ export default Navbar;`
             }
 
             if (userMessageIndex > lastProcessedIndexRef.current) {
-                lastProcessedIndexRef.current = lastIndex; // Mark up to the end as processed
-
+                // If it's a message from DB (fresh load), don't trigger generation 
+                // IF we already have files in state.
                 const latestUserMsg = messages[userMessageIndex];
                 if (latestUserMsg?.fromDb && hasPersistedFilesRef.current) {
+                    lastProcessedIndexRef.current = lastIndex; // Just mark as read
                     return;
                 }
+
+                lastProcessedIndexRef.current = lastIndex; // Mark as read
 
                 // Only generate code if NOT in chatOnly mode
                 if (!chatOnly) {
@@ -2298,22 +2317,24 @@ if (typeof window !== 'undefined') {
                                 </SandpackLayout>
                             </div>
                             <div className={`absolute inset-0 transition-opacity duration-200 ${activeTab === 'preview' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
-                                <div className="h-full w-full flex items-stretch justify-center p-0 bg-background transition-all duration-300 rounded-b-3xl overflow-hidden">
+                                <div className="h-full w-full flex items-stretch justify-center p-0 bg-[#0b1220] transition-all duration-300 rounded-b-3xl overflow-hidden">
                                     <div 
                                         ref={previewWrapperRef}
-                                        className={`bg-white shadow-2xl overflow-hidden transition-all duration-500 h-full relative rounded-b-3xl ${
+                                        className={`bg-[#0b1220] shadow-2xl overflow-hidden transition-all duration-500 h-full relative rounded-b-3xl ${
                                             previewDevice === 'mobile' ? 'w-[375px]' : 
                                             previewDevice === 'tablet' ? 'w-[768px]' : 'w-full'
                                         }`}
                                     >
-                                        <SandpackPreview 
-                                            showNavigator={true}
-                                            style={{ height: '100%' }}
-                                            showOpenInCodeSandbox={false}
-                                            showRefreshButton={false}
-                                            showRestartButton={false}
-                                            actionsChildren={<div style={{ display: 'none' }} />}
-                                        />
+                                        <div style={{ width: '125%', height: '125%', transform: 'scale(0.8)', transformOrigin: '0 0' }}>
+                                            <SandpackPreview 
+                                                showNavigator={true}
+                                                style={{ height: '100%', width: '100%', border: 'none' }}
+                                                showOpenInCodeSandbox={false}
+                                                showRefreshButton={false}
+                                                showRestartButton={false}
+                                                actionsChildren={<div style={{ display: 'none' }} />}
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             </div>

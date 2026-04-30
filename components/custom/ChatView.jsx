@@ -73,10 +73,36 @@ function ChatView() {
     const GetAiResponse = useCallback(async () => {
         setLoading(true);
         const safeMessages = Array.isArray(messages) ? messages : [];
-        // Use a different prompt if in Chat Only mode to avoid JSON generation
+        
+        // Clean and truncate history to avoid huge payloads
+        const cleanHistory = safeMessages.map(msg => {
+            if (msg.role === 'ai') {
+                try {
+                    const parsed = JSON.parse(msg.content);
+                    return {
+                        role: 'ai',
+                        content: parsed.explanation || "Updated the project based on your request."
+                    };
+                } catch (e) {
+                    return {
+                        role: 'ai',
+                        content: typeof msg.content === 'string' ? msg.content.substring(0, 500) : "AI response"
+                    };
+                }
+            }
+            // For user messages, keep them relatively concise but informative
+            return {
+                role: msg.role,
+                content: typeof msg.content === 'string' ? msg.content.substring(0, 2000) : "User request"
+            };
+        });
+
+        // Keep only last 10 messages for chat context to keep payload small
+        const recentHistory = cleanHistory.slice(-10);
+
         const PROMPT = chatOnly 
-            ? JSON.stringify(safeMessages) + "\n\n You are in 'Chat Only' mode. Do NOT generate any code. Just talk to the user naturally and concisely."
-            : JSON.stringify(safeMessages) + Prompt.CHAT_PROMPT;
+            ? JSON.stringify(recentHistory) + "\n\n You are in 'Chat Only' mode. Do NOT generate any code. Just talk to the user naturally and concisely."
+            : JSON.stringify(recentHistory) + Prompt.CHAT_PROMPT;
             
         try {
             const result = await axios.post('/api/ai-chat', {

@@ -145,10 +145,20 @@ FINAL CHECK - Before responding, verify:
 - ✓ Maps included on contact pages
 `;
 
-const enhancePromptForBetterGeneration = (userPrompt) => {
+const enhancePromptForBetterGeneration = (userPrompt, isUpdate = false) => {
   const basePrompt = (userPrompt && typeof userPrompt === "string" && userPrompt.trim()) 
     ? userPrompt 
     : "Create a modern, responsive, content-rich multi-page website";
+
+  if (isUpdate) {
+    return `${basePrompt}
+
+CRITICAL: You are updating an existing project. 
+- PRESERVE the current design language, colors, and layout unless specifically asked to change them.
+- Only return the files that need modification.
+- Ensure all new components are compatible with the existing structure.
+- Maintain high-quality standards and valid JSX syntax.`;
+  }
 
   const designEnhancements = [
     "Use a unique, modern color palette appropriate for the content",
@@ -795,10 +805,11 @@ const normalizePackageJson = (files) => {
 export async function POST(req) {
     const body = await req.json();
     const prompt = body?.prompt;
+    const isUpdate = body?.isUpdate || false;
     const safePrompt = typeof prompt === "string" ? prompt : JSON.stringify(prompt ?? "");
     
     // Use enhanced prompt generation for better quality
-    const effectivePrompt = enhancePromptForBetterGeneration(safePrompt);
+    const effectivePrompt = enhancePromptForBetterGeneration(safePrompt, isUpdate);
 
     try {
         const session = model.startChat({
