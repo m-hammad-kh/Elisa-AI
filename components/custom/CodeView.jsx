@@ -67,6 +67,54 @@ const toSandboxCode = (content) => {
     return '';
 };
 
+const REACT_HOOK_NAMES = [
+    'useState',
+    'useEffect',
+    'useMemo',
+    'useCallback',
+    'useRef',
+    'useContext',
+    'useReducer',
+    'useLayoutEffect',
+    'useImperativeHandle',
+    'useTransition',
+    'useDeferredValue',
+    'useId'
+];
+
+const ensureReactImports = (input) => {
+    let code = typeof input === 'string' ? input : '';
+    if (!code.trim()) return code;
+
+    const usedHooks = REACT_HOOK_NAMES.filter((hook) => new RegExp(`\\b${hook}\\s*\\(`).test(code));
+    if (usedHooks.length === 0) return code;
+
+    const reactImportMatch = code.match(/^import\s+(.+?)\s+from\s+['"]react['"];?\s*$/m);
+    if (!reactImportMatch) {
+        const importStatement = `import React, { ${usedHooks.join(', ')} } from "react";`;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            return `${useClientMatch[0]}${importStatement}\n${code.slice(useClientMatch[0].length)}`;
+        }
+        return `${importStatement}\n${code}`;
+    }
+
+    const existingClause = reactImportMatch[1].trim();
+    const defaultImportMatch = existingClause.match(/^([A-Za-z_$][\w$]*)\s*(?:,|$)/);
+    const defaultImport = defaultImportMatch?.[1] || 'React';
+    const namedImportsMatch = existingClause.match(/\{([^}]+)\}/);
+    const existingNamedImports = namedImportsMatch
+        ? namedImportsMatch[1].split(',').map((part) => part.trim()).filter(Boolean)
+        : [];
+
+    const mergedNamedImports = [...new Set([...existingNamedImports, ...usedHooks])].sort();
+    const nextClause = mergedNamedImports.length > 0
+        ? `${defaultImport}, { ${mergedNamedImports.join(', ')} }`
+        : defaultImport;
+
+    return code.replace(reactImportMatch[0], `import ${nextClause} from "react";\n`);
+};
+
 const fixClassContrast = (code) => {
     const input = typeof code === 'string' ? code : '';
     if (!input) return input;
@@ -167,6 +215,36 @@ const ensureLibraryImports = (input) => {
     return code;
 };
 
+const sanitizeUnsupportedLibraries = (input) => {
+    let code = typeof input === 'string' ? input : '';
+
+    const prependBlock = (block) => {
+        if (!block || code.includes(block.trim())) return;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            code = `${useClientMatch[0]}${block}\n${code.slice(useClientMatch[0].length)}`;
+            return;
+        }
+        code = `${block}\n${code}`;
+    };
+
+    if (/from\s+['"]react-intersection-observer['"]/.test(code)) {
+        code = code.replace(/^\s*import\s+\{?\s*useInView\s*\}?\s+from\s+['"]react-intersection-observer['"];?\s*$/gm, '');
+    }
+    if (/\buseInView\s*\(/.test(code) && !/\bconst\s+useInView\b/.test(code)) {
+        prependBlock(`const useInView = () => {
+  const ref = () => {};
+  const result = [ref, true];
+  result.ref = ref;
+  result.inView = true;
+  result.entry = undefined;
+  return result;
+};`);
+    }
+
+    return code;
+};
+
 const injectSafetyStubs = (input) => {
     let code = typeof input === 'string' ? input : '';
 
@@ -240,6 +318,9 @@ const injectSafetyStubs = (input) => {
 const fixUnsafeSandboxCode = (input) => {
     let code = typeof input === 'string' ? input : '';
     code = code.replace(/\r\n/g, '\n');
+    code = ensureReactImports(code);
+    code = sanitizeUnsupportedLibraries(code);
+    code = repairMismatchedJsxTags(code);
     
     const lines = code.split('\n');
     const seenImports = new Set();
@@ -311,17 +392,19 @@ const fixUnsafeSandboxCode = (input) => {
 
     code = repairMismatchedJsxTags(code);
     code = ensureLibraryImports(code);
-    code = injectSafetyStubs(code);
 
-    // Best-effort contrast fix for obviously unreadable combinations on the same element.
-    code = fixClassContrast(code);
+    // Disabled: fixClassContrast was removing vibrant colors from preview
+    // code = fixClassContrast(code);
 
     return code;
 };
 
 const SANDBOX_EXTERNAL_RESOURCES = [
-    'https://cdn.tailwindcss.com',
-    'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css'
+    // Prefer a CSS fallback (prebuilt) so preview still styles even if Play CDN JS is blocked
+    'https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css',
+    'https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css',
+    // Keep Play CDN as a secondary option
+    'https://cdn.tailwindcss.com'
 ];
 const SAFE_FOOTER_CODE = `import React from "react";
 
@@ -811,9 +894,20 @@ function CodeView() {
                             files: processedCurrent
                         });
                     }
-                    
-                    // Update our internal files state SILENTLY (without triggering re-render if possible)
-                    // or just rely on the next AI generation to pull from sandpackFilesRef.current
+                    // Also send a one-time postMessage to the embedded workspace preview iframe
+                    // so the workspace preview picks up the change immediately (no DB roundtrip).
+                    try {
+                        const iframe = previewWrapperRef.current?.querySelector?.('iframe');
+                        if (iframe?.contentWindow) {
+                            iframe.contentWindow.postMessage({ type: 'ELISA_SYNC_FILES', files: processedCurrent }, '*');
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+
+                    // Update our internal files state SILENTLY (without triggering full SandpackProvider remount)
+                    // so other UI that reads `files` still sees the latest.
+                    setFiles(prev => ({ ...prev, ...processedCurrent }));
                 }
             }, 2000);
 
@@ -1618,6 +1712,38 @@ export default Navbar;`
                     }
                 }
 
+                // Add a minimal inline CSS fallback to preserve basic layout/colors when external CSS is blocked
+                const hasTailwind = out.includes('cdn.tailwindcss.com') || out.includes('tailwind.min.css');
+                if (!hasTailwind) {
+                    const fallbackCss = `
+/* Elisa minimal Tailwind fallback */
+body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
+.bg-white{background-color:#ffffff}
+.bg-slate-950{background-color:#0f172a}
+.text-slate-200{color:#e2e8f0}
+.text-white{color:#ffffff}
+.text-slate-900{color:#0f172a}
+.max-w-6xl{max-width:72rem}
+.mx-auto{margin-left:auto;margin-right:auto}
+.px-6{padding-left:1.5rem;padding-right:1.5rem}
+.py-10{padding-top:2.5rem;padding-bottom:2.5rem}
+.mt-3{margin-top:0.75rem}
+.text-2xl{font-size:1.5rem;line-height:2rem}
+.font-black{font-weight:900}
+.tracking-tight{letter-spacing:-0.01em}
+.text-sm{font-size:0.875rem}
+.text-xs{font-size:0.75rem}
+`;
+                    const styleTag = `<style id="elisa-tailwind-fallback">${fallbackCss}</style>`;
+                    if (out.match(/<\/head>/i)) {
+                        out = out.replace(/<\/head>/i, `    ${styleTag}\n  </head>`);
+                    } else if (out.match(/<head[^>]*>/i)) {
+                        out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${styleTag}`);
+                    } else {
+                        out = styleTag + '\n' + out;
+                    }
+                }
+
                 return out;
             };
 
@@ -1961,17 +2087,15 @@ if (typeof window !== 'undefined') {
             const input = typeof html === 'string' ? html : '';
             if (!input.trim()) return input;
             let out = input;
-            const needsTailwind = !out.includes('cdn.tailwindcss.com');
-            const needsTypography = !out.includes('@tailwindcss/typography');
-            const needsScript = !out.includes('type="module"') && !out.includes('src="/index.jsx"');
-
-            if (!needsTailwind && !needsTypography && !needsScript) return out;
+            // ALWAYS ensure Tailwind for preview - don't skip
+            const hasTailwind = out.includes('cdn.tailwindcss.com');
+            const hasTypography = out.includes('@tailwindcss/typography');
 
             const headInjections = [
-                needsTypography
+                !hasTypography
                     ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
                     : null,
-                needsTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
+                !hasTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
             ].filter(Boolean).join('\n    ');
 
             if (headInjections) {
@@ -1979,10 +2103,22 @@ if (typeof window !== 'undefined') {
                     out = out.replace(/<\/head>/i, `    ${headInjections}\n  </head>`);
                 } else if (out.match(/<head[^>]*>/i)) {
                     out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${headInjections}`);
+                } else {
+                    // If no head tag found, create one
+                    out = `<!DOCTYPE html>
+<html>
+<head>
+    ${headInjections}
+</head>
+<body>
+${out}
+</body>
+</html>`;
+                    return out;
                 }
             }
 
-            if (needsScript) {
+            if (!out.includes('type="module"')) {
                 const bodyCloseMatch = out.match(/<\/body>/i);
                 const scriptTag = '    <script type="module" src="/index.jsx"></script>';
                 if (bodyCloseMatch) {
@@ -2031,6 +2167,8 @@ if (typeof window !== 'undefined') {
 
             Object.entries(validatedFiles).forEach(([path, content]) => {
                 if (path === '/index.html') return;
+                // Exclude internal helper files from Sandpack preview
+                if (path === '/selector-helper.js') return;
                 if (path.startsWith('/public/') || path.startsWith('/src/')) {
                     nextFiles[path] = content;
                     return;
@@ -2083,6 +2221,25 @@ if (typeof window !== 'undefined') {
             ];
             entry = entryCandidates.find((path) => Boolean(validatedFiles[path])) || Object.keys(validatedFiles)[0] || '/index.js';
         }
+
+        // Filter out internal helper files from Sandpack files
+        const internalFiles = new Set(['/selector-helper.js', '/src/selector-helper.js']);
+        const cleanedSandpackFiles = {};
+        Object.entries(sandpackFiles).forEach(([path, content]) => {
+            if (!internalFiles.has(path)) {
+                let fileContent = content;
+                // Also remove import of selector-helper from entry files
+                if (typeof fileContent.code === 'string') {
+                    fileContent = {
+                        code: fileContent.code
+                            .replace(/^import\s+['"]\.\/selector-helper\.js['"];\s*\n?/m, '')
+                            .replace(/^import\s+['"]\.\/selector-helper\.js['"];?\s*$/m, '')
+                    };
+                }
+                cleanedSandpackFiles[path] = fileContent;
+            }
+        });
+        sandpackFiles = cleanedSandpackFiles;
 
         const desiredActive = typeof activeEditorFile === 'string' ? activeEditorFile : '';
         if (isViteLike) {

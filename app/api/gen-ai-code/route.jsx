@@ -150,72 +150,14 @@ const enhancePromptForBetterGeneration = (userPrompt, isUpdate = false) => {
     ? userPrompt 
     : "Create a modern, responsive, content-rich multi-page website";
 
-  if (isUpdate) {
-    return `${basePrompt}
-
-CRITICAL: You are updating an existing project. 
-- PRESERVE the current design language, colors, and layout unless specifically asked to change them.
-- Only return the files that need modification.
-- Ensure all new components are compatible with the existing structure.
-- Maintain high-quality standards and valid JSX syntax.`;
-  }
-
-  const designEnhancements = [
-    "Use a unique, modern color palette appropriate for the content",
-    "Implement sophisticated typography with clear hierarchy",
-    "Add smooth animations and transitions throughout",
-    "Create distinctive sections with varied layouts (not repetitive)",
-    "Include professional imagery and icons from lucide-react",
-  ];
-
-  const structureEnhancements = [
-    "Structure the site with: Home/Hero → Features/Benefits → Testimonials/Social Proof → CTA → Contact",
-    "Create reusable, well-organized React components",
-    "Make every section visually distinct and engaging",
-    "Include meaningful, contextual content (not generic placeholder text)",
-  ];
-
-  const randomDesign = designEnhancements[Math.floor(Math.random() * designEnhancements.length)];
-  const randomStructure = structureEnhancements[Math.floor(Math.random() * structureEnhancements.length)];
-
   return `${basePrompt}
 
-DESIGN FOCUS: ${randomDesign}
-STRUCTURE: ${randomStructure}
-
-MUST INCLUDE:
-- Responsive design that works on mobile, tablet, and desktop
-- Modern Tailwind CSS styling (NOT generic, make it visually distinctive)
-- Smooth Framer Motion animations and transitions
-- At least 4-5 different page sections
-- Navigation bar with responsive mobile menu
-- Hero section with compelling imagery/content
-- Features or benefits section with cards or grid
-- Testimonials or social proof section
-- Call-to-action section
-- Footer.jsx: Professional footer that MATCHES the website's color scheme (use primary colors from hero/branding)
-- Real, contextual content (not Lorem Ipsum)
-
-CRITICAL - FOOTER DESIGN:
-- Create a UNIQUE footer for each website based on its theme and colors
-- DO NOT always use dark backgrounds - match the website's palette
-- Examples: Tech sites → dark/modern; Creative sites → bold/colorful; Corporate → clean/minimal
-- Include: brand info, navigation links, social media, copyright
-- Make each footer VISUALLY DISTINCT from previous generations
-
-CRITICAL - IMAGES & BACKGROUNDS:
-- ALWAYS add solid color backgrounds or gradients behind images
-- Every image must have a beautiful fallback color in case it fails to load
-- Use Tailwind: bg-slate-200, bg-blue-100, or gradient classes
-- Images should be wrapped in divs with background colors: <div className="bg-gradient-to-r from-blue-500 to-purple-600"><img src="..." /></div>
-- Use images from pexels.com or picsum.photos
-
-CRITICAL - MAPS:
-- If creating a Contact or Location page, include an embedded Google Maps iframe
-- Make maps responsive with width="100%" and reasonable height
-- Keep map styling consistent with website theme
-
-REMEMBER: Each generation should look DIFFERENT and UNIQUE - vary the design, layouts, colors, footers, and content structure.`;
+GENERATION PRIORITIES:
+- Valid JSX and correct imports matter more than visual complexity.
+- Keep the first response compact and reliable: only create the files needed for a working Vite React website.
+- Prefer a small set of reusable components and up to 4 routes/pages unless the user explicitly asks for more.
+- Use only the approved dependencies.
+- ${isUpdate ? "Modify only the necessary files and preserve the existing design/system." : "Deliver a polished result without over-expanding the file count."}`;
 };
 
 const hasValidPath = (value) => {
@@ -250,6 +192,158 @@ const toCodeString = (content) => {
         return JSON.stringify(content, null, 2);
     }
     return "";
+};
+
+const REACT_HOOK_NAMES = [
+    "useState",
+    "useEffect",
+    "useMemo",
+    "useCallback",
+    "useRef",
+    "useContext",
+    "useReducer",
+    "useLayoutEffect",
+    "useImperativeHandle",
+    "useTransition",
+    "useDeferredValue",
+    "useId"
+];
+
+const ensureReactImports = (input) => {
+    let code = typeof input === "string" ? input : "";
+    if (!code.trim()) return code;
+
+    const hookMatches = REACT_HOOK_NAMES.filter((hook) => new RegExp(`\\b${hook}\\s*\\(`).test(code));
+    if (hookMatches.length === 0) {
+        return code;
+    }
+
+    const reactImportMatch = code.match(/^import\s+(.+?)\s+from\s+['"]react['"];?\s*$/m);
+    if (!reactImportMatch) {
+        const importStatement = `import React, { ${hookMatches.join(", ")} } from "react";`;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            return `${useClientMatch[0]}${importStatement}\n${code.slice(useClientMatch[0].length)}`;
+        }
+        return `${importStatement}\n${code}`;
+    }
+
+    const existingClause = reactImportMatch[1].trim();
+    const defaultImportMatch = existingClause.match(/^([A-Za-z_$][\w$]*)\s*(?:,|$)/);
+    const defaultImport = defaultImportMatch?.[1] || "React";
+    const namedImportsMatch = existingClause.match(/\{([^}]+)\}/);
+    const existingNamedImports = namedImportsMatch
+        ? namedImportsMatch[1].split(",").map((part) => part.trim()).filter(Boolean)
+        : [];
+
+    const mergedNamedImports = [...new Set([...existingNamedImports, ...hookMatches])].sort();
+    const nextClause = mergedNamedImports.length > 0
+        ? `${defaultImport}, { ${mergedNamedImports.join(", ")} }`
+        : defaultImport;
+
+    return code.replace(reactImportMatch[0], `import ${nextClause} from "react";\n`);
+};
+
+const isLikelyReactSourceFile = (path) => typeof path === "string" && /\.(jsx|tsx|js|ts)$/i.test(path);
+
+const collectGeneratedFileIssues = (path, input) => {
+    const code = typeof input === "string" ? input : "";
+    const issues = [];
+
+    if (!code.trim()) {
+        issues.push("File is empty.");
+        return issues;
+    }
+
+    if (isLikelyReactSourceFile(path)) {
+        const missingHooks = REACT_HOOK_NAMES.filter((hook) => {
+            const usesHook = new RegExp(`\\b${hook}\\s*\\(`).test(code);
+            const importsHook = new RegExp(`import[\\s\\S]{0,200}\\b${hook}\\b[\\s\\S]{0,200}from\\s+['"]react['"]`, "m").test(code);
+            return usesHook && !importsHook;
+        });
+
+        if (missingHooks.length > 0) {
+            issues.push(`Missing React hook imports: ${missingHooks.join(", ")}.`);
+        }
+
+        if (/<[A-Za-z][^>\n]*\n\s*<\/?[A-Za-z]/.test(code)) {
+            issues.push("Found a JSX opening tag that appears to be missing its closing `>` before the next tag.");
+        }
+
+        if (/<[A-Za-z][^>]*\sclassName="[^"]*"\s*$/.test(code)) {
+            issues.push("Found a JSX tag line that ends before the opening tag is closed.");
+        }
+
+        if (/:\s*"[^"\n]*"[A-Za-z][^"\n]*"/.test(code)) {
+            issues.push("Found a JavaScript string literal with an unescaped double quote inside it.");
+        }
+
+        const openTags = (code.match(/<([A-Za-z][\w.:]*)\b(?![^>]*\/>)/g) || []).length;
+        const closeTags = (code.match(/<\/([A-Za-z][\w.:]*)>/g) || []).length;
+        if (Math.abs(openTags - closeTags) >= 3) {
+            issues.push("JSX tag counts look unbalanced, which usually means a mismatched or missing closing tag.");
+        }
+    }
+
+    return issues;
+};
+
+const collectProblemFiles = (files) => {
+    const problems = [];
+    Object.entries(files || {}).forEach(([path, content]) => {
+        const code = toCodeString(content);
+        const issues = collectGeneratedFileIssues(path, code);
+        if (issues.length > 0) {
+            problems.push({ path, code, issues });
+        }
+    });
+    return problems;
+};
+
+const repairProblemFiles = async (files) => {
+    const problems = collectProblemFiles(files).slice(0, 6);
+    if (problems.length === 0) {
+        return files;
+    }
+
+    const session = model.startChat({
+        generationConfig: CodeGenerationConfig,
+        history: [],
+    });
+
+    const repairPrompt = [
+        "You are repairing invalid React/Vite files that were just generated.",
+        "Return ONLY a JSON object that matches the schema.",
+        "Do not redesign the project. Do not add new features. Do not change unaffected files.",
+        "Fix only the listed files so they become syntactically valid and keep the same intent/content.",
+        "Important: preserve existing imports unless they are wrong, import missing React hooks from react, close every JSX tag correctly, and escape quotes inside JavaScript strings.",
+        "",
+        "FILES TO REPAIR:",
+        ...problems.map((problem, index) => [
+            `${index + 1}. Path: ${problem.path}`,
+            `Issues: ${problem.issues.join(" ")}`,
+            `Code: ${JSON.stringify(problem.code)}`
+        ].join("\n")),
+        "",
+        "Return only the repaired files in the `files` array. Use absolute file paths."
+    ].join("\n");
+
+    const result = await withTimeout(
+        sendMessageWithRetry(session, repairPrompt, 2),
+        30000,
+        "Repair generation"
+    );
+
+    const repairResponse = tryParseJson(result.response.text());
+    const repairedFiles = normalizeFilesMap(repairResponse?.files);
+    if (Object.keys(repairedFiles).length === 0) {
+        return files;
+    }
+
+    return {
+        ...files,
+        ...repairedFiles
+    };
 };
 
 const fixClassContrast = (code) => {
@@ -347,6 +441,36 @@ const ensureLibraryImports = (input) => {
     });
     if (usedRouterSymbols.length > 0 && !/from\s+['"]react-router-dom['"]/.test(code)) {
         prependImport(`import { ${usedRouterSymbols.join(", ")} } from 'react-router-dom';`);
+    }
+
+    return code;
+};
+
+const sanitizeUnsupportedLibraries = (input) => {
+    let code = typeof input === "string" ? input : "";
+
+    const prependBlock = (block) => {
+        if (!block || code.includes(block.trim())) return;
+        const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+        if (useClientMatch) {
+            code = `${useClientMatch[0]}${block}\n${code.slice(useClientMatch[0].length)}`;
+            return;
+        }
+        code = `${block}\n${code}`;
+    };
+
+    if (/from\s+['"]react-intersection-observer['"]/.test(code)) {
+        code = code.replace(/^\s*import\s+\{?\s*useInView\s*\}?\s+from\s+['"]react-intersection-observer['"];?\s*$/gm, "");
+    }
+    if (/\buseInView\s*\(/.test(code) && !/\bconst\s+useInView\b/.test(code)) {
+        prependBlock(`const useInView = () => {
+  const ref = () => {};
+  const result = [ref, true];
+  result.ref = ref;
+  result.inView = true;
+  result.entry = undefined;
+  return result;
+};`);
     }
 
     return code;
@@ -473,6 +597,9 @@ const addImageBackgroundFallbacks = (code) => {
 const fixUnsafeCode = (input) => {
     let code = typeof input === "string" ? input : "";
     code = code.replace(/\r\n/g, "\n");
+    code = ensureReactImports(code);
+    code = sanitizeUnsupportedLibraries(code);
+    code = repairMismatchedJsxTags(code);
 
     code = code
         .split("\n")
@@ -502,7 +629,6 @@ const fixUnsafeCode = (input) => {
     code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
     code = repairMismatchedJsxTags(code);
     code = ensureLibraryImports(code);
-    code = injectSafetyStubs(code);
     code = fixClassContrast(code);
     code = addImageBackgroundFallbacks(code); // Add solid backgrounds to images
 
@@ -802,6 +928,37 @@ const normalizePackageJson = (files) => {
     }
 };
 
+const sanitizeViteConfig = (files) => {
+        if (!files) return;
+        const key = "/vite.config.js";
+        const raw = toCodeString(files[key] || "");
+        if (!raw.trim()) return;
+
+        const unsafePatterns = [
+                /module\.exports\b/, // CommonJS export
+                /exports\./, // CommonJS exports
+                /require\(\s*['"]path['"]\s*\)/, // require('path') usage
+                /__dirname\b/, // __dirname usage
+                /require\(/, // any require calls
+        ];
+
+        const isUnsafe = unsafePatterns.some((rx) => rx.test(raw));
+        if (isUnsafe) {
+                const safe = `import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+    plugins: [
+        react({
+            include: "**/*.{js,jsx,ts,tsx}"
+        })
+    ]
+});
+`;
+                files[key] = { code: safe };
+        }
+};
+
 export async function POST(req) {
     const body = await req.json();
     const prompt = body?.prompt;
@@ -833,10 +990,12 @@ export async function POST(req) {
             throw new Error("AI response is missing the 'files' data.");
         }
 
-        const allFiles = normalizeFilesMap(jsonResponse.files);
+        let allFiles = normalizeFilesMap(jsonResponse.files);
         if (Object.keys(allFiles).length === 0) {
             throw new Error("AI returned files, but all file paths were invalid.");
         }
+
+        allFiles = await repairProblemFiles(allFiles);
 
         const commonLucideIcons = ["Menu", "X", "MapPin", "Phone", "Mail", "Clock", "ChevronRight", "ChevronLeft", "Star", "User", "ShoppingCart", "Search", "Bell", "Settings", "LogOut", "Trash", "Edit", "Plus", "Check", "AlertCircle", "Info", "ExternalLink", "Github", "Twitter", "Facebook", "Instagram", "Linkedin", "ArrowRight", "ArrowLeft", "Play", "Pause", "Heart", "Share2", "Globe", "Download", "Cloud", "Lock", "Unlock", "Eye", "EyeOff", "Calendar", "Filter", "Layout", "Grid", "List", "Zap", "Award", "Target", "Activity", "BarChart", "PieChart", "FileText", "Image", "Video", "Music", "Camera", "Mic", "Monitor", "Smartphone", "Tablet", "Laptop", "Server", "Database", "Cpu", "Terminal", "Code", "Layers", "Boxes", "Box", "Package", "Truck", "Gift", "CreditCard", "DollarSign", "Briefcase", "BookOpen", "GraduationCap", "Coffee", "Utensils", "Pizza", "GlassWater", "Plane", "Map", "Navigation", "Compass", "Sun", "Moon", "CloudRain", "Wind", "Thermometer", "Droplets", "Umbrella", "HelpCircle", "MessageSquare", "Send", "ThumbsUp", "ThumbsDown", "UserPlus", "UserMinus", "Users", "UserCheck", "UserX", "Shield", "ShieldCheck", "ShieldAlert", "ShieldOff", "Flag", "Tag", "Bookmark", "Flame", "Sparkles", "Ghost", "Smile", "Frown", "Meh", "Angry", "Laugh", "Wink", "Dizzy", "Hand", "Fingerprint", "Wifi", "Bluetooth", "Battery", "Cast", "Tv", "Speaker", "Headphones", "Mic2", "Radio", "Volume2", "VolumeX", "Maximize2", "Minimize2", "Crop", "RotateCw", "RotateCcw", "RefreshCw", "RefreshCcw", "Hash", "AtSign", "Percent", "Divide", "Equal", "PlusCircle", "MinusCircle", "XCircle", "CheckCircle", "AlertTriangle", "Loader2"];
 
@@ -882,6 +1041,8 @@ export async function POST(req) {
             allFiles[filePath] = { code: fixUnsafeCode(code) };
         }
 
+        allFiles = await repairProblemFiles(allFiles);
+
         ensureFile(allFiles, "/index.html", DEFAULT_ENTRY_HTML);
         ensureFile(allFiles, "/index.jsx", DEFAULT_INDEX_JSX);
         ensureFile(allFiles, "/App.jsx", DEFAULT_APP_JSX);
@@ -891,6 +1052,14 @@ export async function POST(req) {
 
         if (!allFiles["/README.md"]) {
             allFiles["/README.md"] = { code: buildReadme(jsonResponse.projectTitle) };
+        }
+
+        const remainingProblems = collectProblemFiles(allFiles).slice(0, 4);
+        if (remainingProblems.length > 0) {
+            const summary = remainingProblems
+                .map((problem) => `${problem.path}: ${problem.issues[0]}`)
+                .join(" | ");
+            throw new Error(`Generated code is still invalid after repair. ${summary}`);
         }
 
         return NextResponse.json({

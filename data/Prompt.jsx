@@ -15,7 +15,8 @@ const Prompt = {
 
     CODE_GEN_PROMPT: dedent`
     Generate a fully structured, professional-grade React project using Vite.
-    The goal is to create a high-end, production-ready website that is visually stunning, content-rich, and highly interactive.
+    The goal is to create a polished, production-ready website, but correctness comes first.
+    Prefer a smaller, clean, fully working codebase over an over-complicated one.
 
     **Icon Library (CRITICAL):**
     - Use ONLY **lucide-react** for all icons. 
@@ -46,8 +47,8 @@ const Prompt = {
     **Content & Multi-Page Features:**
     - **Data Integrity (CRITICAL):** ALWAYS preserve and use user-provided specific details (e.g., person names, website titles, brand names, contact info, API keys, or specific text) exactly as provided in the prompt. NEVER replace them with generic placeholders if the user has specified them.
     - **No Placeholder Tokens (CRITICAL):** Never output bracket placeholders like \`[Photographer's Name]\`, \`[Your Tagline]\`, \`[Company Name]\`, or generic dummy labels. If the user did not provide a specific name, invent a polished realistic one.
-    - **Home Page Depth (CRITICAL):** Home page MUST have at least 6-7 distinct sections (e.g., Hero, Features, About, Steps/Process, Stats, Testimonials, FAQ, CTA, Blog/News, Pricing). Use realistic, rich content.
-    - **Multi-Page Experience:** Always include a **Contact Us** page with a functional **Google Maps / Leaflet Location** section (using an iframe or mock map UI).
+    - **Home Page Depth (CRITICAL):** Home page should usually have 4-5 strong sections with realistic content. Expand further only when the user clearly asks for a larger site.
+    - **Multi-Page Experience:** Use multiple pages only when the request needs them. If you create a Contact page, include a functional map section.
     - **Respect Existing Contact Page:** If this is an update request and the user did NOT ask to change Contact, keep the Contact page as-is.
     - **Navbar & Footer (CRITICAL):** Always generate BOTH /components/Navbar.jsx and /components/Footer.jsx and ALWAYS render them in /App.jsx on every page. Footer must have a solid (non-transparent) background and readable text. Each footer MUST be uniquely designed to match the site's theme — do NOT reuse a generic footer template.
     - **Footer Export (CRITICAL):** The Footer component MUST use \`export default Footer\` explicitly. Never use anonymous exports for Footer.
@@ -65,7 +66,8 @@ const Prompt = {
     - Ensure every image tag has a valid source.
 
     **Code Quality & Syntax (CRITICAL):**
-    - **Valid JavaScript:** Ensure all code is syntactically correct. 
+    - **Valid JavaScript:** Ensure all code is syntactically correct.
+    - **Reliability Over Complexity (CRITICAL):** If a design choice risks broken JSX, missing imports, or invalid strings, choose the simpler valid implementation.
     - **Preflight Self-Check (CRITICAL):** Before returning JSON, manually verify every generated React file for syntax correctness. Check matching JSX opening/closing tags, especially \`<Link>\`, \`<motion.div>\`, \`<motion.p>\`, \`<section>\`, \`<div>\`, and mapped JSX blocks.
     - **NO NULL PATHS (CRITICAL):** Never use \`null\`, \`undefined\`, or empty strings \`""\` as a path or in any \`import\`, \`require\`, \`href\`, \`src\`, \`action\`, \`poster\`, or \`to\` attribute. 
     - **NO NODE BUILTINS (CRITICAL):** Never import or use Node.js modules like \`path\`, \`fs\`, or \`os\`. This code runs in the browser.

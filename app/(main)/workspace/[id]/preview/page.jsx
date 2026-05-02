@@ -129,6 +129,36 @@ const ensureLibraryImports = (input) => {
   return code;
 };
 
+const sanitizeUnsupportedLibraries = (input) => {
+  let code = typeof input === 'string' ? input : '';
+
+  const prependBlock = (block) => {
+    if (!block || code.includes(block.trim())) return;
+    const useClientMatch = code.match(/^(['"])use client\1;?\s*/);
+    if (useClientMatch) {
+      code = `${useClientMatch[0]}${block}\n${code.slice(useClientMatch[0].length)}`;
+      return;
+    }
+    code = `${block}\n${code}`;
+  };
+
+  if (/from\s+['"]react-intersection-observer['"]/.test(code)) {
+    code = code.replace(/^\s*import\s+\{?\s*useInView\s*\}?\s+from\s+['"]react-intersection-observer['"];?\s*$/gm, '');
+  }
+  if (/\buseInView\s*\(/.test(code) && !/\bconst\s+useInView\b/.test(code)) {
+    prependBlock(`const useInView = () => {
+  const ref = () => {};
+  const result = [ref, true];
+  result.ref = ref;
+  result.inView = true;
+  result.entry = undefined;
+  return result;
+};`);
+  }
+
+  return code;
+};
+
 const injectSafetyStubs = (input) => {
   let code = typeof input === 'string' ? input : '';
 
@@ -202,6 +232,7 @@ const injectSafetyStubs = (input) => {
 const fixUnsafeSandboxCode = (input) => {
   let code = typeof input === 'string' ? input : '';
   code = code.replace(/\r\n/g, '\n');
+  code = sanitizeUnsupportedLibraries(code);
   
   // Fix common AI errors: importing from null/undefined or empty strings
   code = code
@@ -239,7 +270,6 @@ const fixUnsafeSandboxCode = (input) => {
   code = code.replace(/new URL\(\s*(null|undefined)\s*,/g, 'new URL(".",');
   code = repairMismatchedJsxTags(code);
   code = ensureLibraryImports(code);
-  code = injectSafetyStubs(code);
   
   return code;
 };
@@ -252,17 +282,17 @@ export default function WorkspacePreviewPage() {
     api.workspace.GetWorkspace,
     id && isLoaded && userId ? { workspaceId: id, userId } : "skip"
   );
-  const sandpackKey = useMemo(() => {
-    if (!workspace?.fileData) return 'preview-empty';
-    try {
-      const data = workspace.fileData;
-      const keys = typeof data === 'object' && data !== null ? Object.keys(data) : [];
-      const json = JSON.stringify(data);
-      return `preview-${json.length}-${keys.length}`;
-    } catch (e) {
-      return 'preview-error';
-    }
-  }, [workspace?.fileData]);
+     const sandpackKey = useMemo(() => {
+       if (!workspace?.fileData) return 'preview-empty';
+       try {
+         const data = workspace.fileData;
+         const keys = typeof data === 'object' && data !== null ? Object.keys(data) : [];
+         const json = JSON.stringify(data);
+         return `preview-${json.length}-${keys.length}`;
+       } catch (e) {
+         return 'preview-error';
+       }
+     }, [workspace?.fileData]);
 
   const files = useMemo(() => {
     const processed = {};
@@ -294,21 +324,68 @@ export default function WorkspacePreviewPage() {
     const input = typeof html === 'string' ? html : '';
     if (!input.trim()) return input;
     let out = input;
-    const needsTailwind = !out.includes('cdn.tailwindcss.com');
-    const needsTypography = !out.includes('@tailwindcss/typography');
-    if (!needsTailwind && !needsTypography) return out;
+    // ALWAYS ensure Tailwind for preview
+    const hasTailwind = out.includes('cdn.tailwindcss.com');
+    const hasTypography = out.includes('@tailwindcss/typography');
+
     const injections = [
-      needsTypography
-        ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
-        : null,
-      needsTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
+         !hasTypography
+           ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
+           : null,
+         !hasTailwind ? '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />' : null
     ].filter(Boolean).join('\n    ');
+    
     if (out.match(/<\/head>/i)) {
       return out.replace(/<\/head>/i, `    ${injections}\n  </head>`);
     }
     if (out.match(/<head[^>]*>/i)) {
-      return out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${injections}`);
+      out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${injections}`);
     }
+    if (!out.includes('<head')) {
+      out = `<!DOCTYPE html>
+<html>
+<head>
+    ${injections}
+</head>
+<body>
+${out}
+</body>
+</html>`;
+    }
+
+    // Add a minimal inline CSS fallback to preserve basic layout/colors when external CSS is blocked
+    if (!hasTailwind) {
+      const fallbackCss = `
+/* Elisa minimal Tailwind fallback */
+body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
+.bg-white{background-color:#ffffff}
+.bg-slate-950{background-color:#0f172a}
+.text-slate-200{color:#e2e8f0}
+.text-white{color:#ffffff}
+.text-slate-900{color:#0f172a}
+.max-w-6xl{max-width:72rem}
+.mx-auto{margin-left:auto;margin-right:auto}
+.px-6{padding-left:1.5rem;padding-right:1.5rem}
+.py-10{padding-top:2.5rem;padding-bottom:2.5rem}
+.mt-3{margin-top:0.75rem}
+.text-2xl{font-size:1.5rem;line-height:2rem}
+.font-black{font-weight:900}
+.tracking-tight{letter-spacing:-0.01em}
+.text-sm{font-size:0.875rem}
+.text-xs{font-size:0.75rem}
+`;
+      const styleTag = `<style id="elisa-tailwind-fallback">${fallbackCss}</style>`;
+      // Inject fallback before closing head if possible
+      if (out.match(/<\/head>/i)) {
+        out = out.replace(/<\/head>/i, `    ${styleTag}\n  </head>`);
+      } else if (out.match(/<head[^>]*>/i)) {
+        out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${styleTag}`);
+      } else {
+        // prepend to document
+        out = styleTag + '\n' + out;
+      }
+    }
+
     return `${injections}\n${out}`;
   };
 
@@ -326,7 +403,41 @@ export default function WorkspacePreviewPage() {
         files['/vite.config.js'])
   );
 
-  let sandpackFiles = files;
+      let sandpackFiles = files;
+      const [liveFiles, setLiveFiles] = React.useState(sandpackFiles);
+
+      // Keep liveFiles in sync with DB-driven files when workspace data changes
+      React.useEffect(() => {
+        setLiveFiles(sandpackFiles);
+      }, [JSON.stringify(sandpackFiles)]);
+
+      const MessageSyncHandler = ({ setLiveFiles }) => {
+        React.useEffect(() => {
+          const handle = (event) => {
+            try {
+              const data = event.data || {};
+              if (data && data.type === 'ELISA_SYNC_FILES' && data.files && typeof data.files === 'object') {
+                setLiveFiles((prev) => {
+                  const next = { ...(prev || {}) };
+                  Object.entries(data.files || {}).forEach(([path, content]) => {
+                    const key = path && typeof path === 'string' ? (path.startsWith('/') ? path : `/${path}`) : `/${String(path)}`;
+                    if (content && typeof content === 'object' && typeof content.code === 'string') {
+                      next[key] = { code: content.code };
+                    } else if (typeof content === 'string') {
+                      next[key] = { code: content };
+                    }
+                  });
+                  return next;
+                });
+              }
+            } catch (e) {}
+          };
+          window.addEventListener('message', handle);
+          return () => window.removeEventListener('message', handle);
+        }, [setLiveFiles]);
+
+        return null;
+      };
   let entry;
 
   if (isViteLike) {
@@ -404,7 +515,7 @@ export default function WorkspacePreviewPage() {
     <div className="h-screen w-screen overflow-hidden bg-white">
       <SandpackProvider
         key={sandpackKey}
-        files={sandpackFiles}
+        files={liveFiles}
         template={template}
         theme="dark"
         customSetup={{
@@ -423,6 +534,8 @@ export default function WorkspacePreviewPage() {
           autorun: true,
         }}
       >
+            {/* Listen for editor sync messages from parent to apply live updates */}
+            <MessageSyncHandler setLiveFiles={setLiveFiles} />
         <SandpackPreview
           showNavigator={false}
           style={{ height: '100vh' }}
