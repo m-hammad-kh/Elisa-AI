@@ -1,10 +1,10 @@
 "use client"
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery } from "convex/react";
 import { useUser } from "@clerk/clerk-react";
 import { api } from "@/convex/_generated/api";
-import { Folder, Clock, ArrowRight, Sparkles, Plus, Pencil, Trash2, Check, X } from "lucide-react";
+import { Folder, Clock, ArrowRight, Sparkles, Plus, Pencil, Trash2, Check, X, Loader2, Square, SquareCheckBig } from "lucide-react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 
@@ -28,18 +28,50 @@ export default function LibraryPage() {
   const { user, isLoaded } = useUser();
   const userId = user?.id;
   const router = useRouter();
-  const workspaces = useQuery(
+  const paginatedWorkspaces = usePaginatedQuery(
     api.workspace.ListWorkspacesByUser,
-    userId ? { userId, limit: 24 } : "skip"
+    userId ? { userId } : "skip",
+    { initialNumItems: 24 }
   );
   const renameWorkspace = useMutation(api.workspace.RenameWorkspace);
   const deleteWorkspace = useMutation(api.workspace.DeleteWorkspace);
+  const deleteWorkspaces = useMutation(api.workspace.DeleteWorkspaces);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
+  const [selectedWorkspaceIds, setSelectedWorkspaceIds] = useState(() => new Set());
+
+  const workspaces = paginatedWorkspaces?.results ?? [];
+  const total = workspaces.length;
+  const hasProjects = total > 0;
+  const paginationStatus = paginatedWorkspaces?.status;
+  const canLoadMore = paginationStatus === "CanLoadMore";
+  const isLoadingMore = paginationStatus === "LoadingMore" || paginationStatus === "LoadingFirstPage";
+  const selectedCount = selectedWorkspaceIds.size;
+  const allLoadedSelected = hasProjects && selectedCount === total;
 
   const startEdit = (workspace) => {
     setEditingId(workspace._id);
     setEditTitle(workspace.title || "");
+  };
+
+  const toggleWorkspaceSelection = (workspaceId) => {
+    setSelectedWorkspaceIds((currentSelection) => {
+      const nextSelection = new Set(currentSelection);
+      if (nextSelection.has(workspaceId)) {
+        nextSelection.delete(workspaceId);
+      } else {
+        nextSelection.add(workspaceId);
+      }
+      return nextSelection;
+    });
+  };
+
+  const selectLoadedWorkspaces = () => {
+    setSelectedWorkspaceIds(new Set(workspaces.map((workspace) => workspace._id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedWorkspaceIds(new Set());
   };
 
   const cancelEdit = () => {
@@ -66,13 +98,38 @@ export default function LibraryPage() {
     await deleteWorkspace({ workspaceId, userId });
   };
 
-  const hasProjects = Array.isArray(workspaces) && workspaces.length > 0;
-  const total = Array.isArray(workspaces) ? workspaces.length : 0;
+  const handleDeleteSelected = async () => {
+    if (!userId || selectedCount === 0) return;
+    const ok = window.confirm(
+      `Delete ${selectedCount} selected project${selectedCount === 1 ? "" : "s"}? This cannot be undone.`
+    );
+    if (!ok) return;
+    await deleteWorkspaces({ workspaceIds: Array.from(selectedWorkspaceIds), userId });
+    clearSelection();
+  };
+
   const heading = useMemo(() => {
     if (!isLoaded) return "Loading Projects";
     if (!hasProjects) return "No Projects Yet";
     return "Project Library";
   }, [isLoaded, hasProjects]);
+
+  useEffect(() => {
+    setSelectedWorkspaceIds((currentSelection) => {
+      if (currentSelection.size === 0) return currentSelection;
+
+      const loadedIds = new Set(workspaces.map((workspace) => workspace._id));
+      const nextSelection = new Set();
+
+      for (const workspaceId of currentSelection) {
+        if (loadedIds.has(workspaceId)) {
+          nextSelection.add(workspaceId);
+        }
+      }
+
+      return nextSelection;
+    });
+  }, [workspaces]);
 
   useEffect(() => {
     if (isLoaded && !user) {
@@ -95,10 +152,38 @@ export default function LibraryPage() {
               {heading}
             </h1>
             <p className="text-muted-foreground font-bold uppercase tracking-[0.18em] text-[11px] mt-4">
-              {hasProjects ? `${total} active builds` : "Start a new build to see it here"}
+              {hasProjects ? `${total} recent projects shown` : "Start a new build to see it here"}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {selectedCount > 0 && (
+              <button
+                onClick={handleDeleteSelected}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200 font-black uppercase tracking-[0.2em] text-[10px] transition-all hover:bg-red-500/20"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete Selected ({selectedCount})
+              </button>
+            )}
+            {hasProjects && (
+              <button
+                onClick={allLoadedSelected ? clearSelection : selectLoadedWorkspaces}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-border/60 bg-white/70 dark:bg-white/5 font-black uppercase tracking-[0.2em] text-[10px] transition-all hover:border-primary/50"
+              >
+                {allLoadedSelected ? <SquareCheckBig className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                {allLoadedSelected ? "Clear Selection" : "Select Visible"}
+              </button>
+            )}
+            {hasProjects && (
+              <button
+                onClick={() => paginatedWorkspaces.loadMore(24)}
+                disabled={!canLoadMore || isLoadingMore}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-border/60 bg-white/70 dark:bg-white/5 font-black uppercase tracking-[0.2em] text-[10px] transition-all hover:border-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                {canLoadMore ? "Load More" : "All Loaded"}
+              </button>
+            )}
             <Link
               href="/prompt"
               className="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-primary hover:bg-red-700 text-white font-black uppercase tracking-[0.2em] text-[10px] transition-all shadow-[4px_4px_0px_rgba(0,0,0,0.15)] hover:shadow-[2px_2px_0px_rgba(0,0,0,0.15)]"
@@ -131,7 +216,7 @@ export default function LibraryPage() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className="rounded-[40px] border border-border/60 bg-card/40 backdrop-blur-md hover:bg-card/80 hover:border-primary/50 transition-all duration-500 shadow-xl shadow-black/5 overflow-hidden group"
+                className={`rounded-[40px] border bg-card/40 backdrop-blur-md hover:bg-card/80 hover:border-primary/50 transition-all duration-500 shadow-xl shadow-black/5 overflow-hidden group ${selectedWorkspaceIds.has(workspace._id) ? "border-primary ring-2 ring-primary/20" : "border-border/60"}`}
               >
                 {editingId === workspace._id ? (
                   <div className="p-6 h-full">
@@ -140,6 +225,17 @@ export default function LibraryPage() {
                         <Folder className="h-5 w-5" />
                       </div>
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            toggleWorkspaceSelection(workspace._id);
+                          }}
+                          className="h-8 w-8 rounded-full flex items-center justify-center border border-border/60 text-foreground hover:text-primary hover:border-primary transition-colors"
+                          title={selectedWorkspaceIds.has(workspace._id) ? "Deselect" : "Select"}
+                        >
+                          {selectedWorkspaceIds.has(workspace._id) ? <SquareCheckBig className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                        </button>
                         <button
                           onClick={saveEdit}
                           className="h-8 w-8 rounded-full flex items-center justify-center border border-border/60 text-foreground hover:text-primary hover:border-primary transition-colors"
@@ -172,7 +268,7 @@ export default function LibraryPage() {
                     </div>
                   </div>
                 ) : (
-                  <Link href={`/workspace/${workspace._id}`} className="block p-6 h-full group">
+                  <div className="block p-6 h-full group">
                     <div className="flex items-start justify-between gap-4">
                       <div className="h-10 w-10 rounded-2xl bg-primary/20 text-primary flex items-center justify-center">
                         <Folder className="h-5 w-5" />
@@ -209,16 +305,20 @@ export default function LibraryPage() {
                       <Clock className="h-3 w-3" />
                       Updated {formatDate(workspace.updatedAt)}
                     </div>
-                    <div className="mt-4 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">
+                    <Link
+                      href={`/workspace/${workspace._id}`}
+                      className="mt-4 inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground"
+                    >
                       <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:text-primary transition-colors" />
                       Open Workspace
-                    </div>
-                  </Link>
+                    </Link>
+                  </div>
                 )}
               </motion.div>
             ))}
           </div>
         )}
+
       </div>
     </div>
   );

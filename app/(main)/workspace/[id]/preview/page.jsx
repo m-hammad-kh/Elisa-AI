@@ -282,18 +282,6 @@ export default function WorkspacePreviewPage() {
     api.workspace.GetWorkspace,
     id && isLoaded && userId ? { workspaceId: id, userId } : "skip"
   );
-     const sandpackKey = useMemo(() => {
-       if (!workspace?.fileData) return 'preview-empty';
-       try {
-         const data = workspace.fileData;
-         const keys = typeof data === 'object' && data !== null ? Object.keys(data) : [];
-         const json = JSON.stringify(data);
-         return `preview-${json.length}-${keys.length}`;
-       } catch (e) {
-         return 'preview-error';
-       }
-     }, [workspace?.fileData]);
-
   const files = useMemo(() => {
     const processed = {};
     Object.entries(workspace?.fileData || {}).forEach(([path, content]) => {
@@ -328,24 +316,22 @@ export default function WorkspacePreviewPage() {
     const hasTailwind = out.includes('cdn.tailwindcss.com');
     const hasTypography = out.includes('@tailwindcss/typography');
 
-    const injections = [
-         !hasTypography
-           ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
-           : null,
-         !hasTailwind ? '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />' : null
+    const headInjections = [
+      !hasTypography
+        ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
+        : null,
+      !hasTailwind ? '<script src="https://cdn.tailwindcss.com"></script>' : null
     ].filter(Boolean).join('\n    ');
     
-    if (out.match(/<\/head>/i)) {
-      return out.replace(/<\/head>/i, `    ${injections}\n  </head>`);
-    }
-    if (out.match(/<head[^>]*>/i)) {
-      out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${injections}`);
-    }
-    if (!out.includes('<head')) {
+    if (headInjections && out.match(/<\/head>/i)) {
+      out = out.replace(/<\/head>/i, `    ${headInjections}\n  </head>`);
+    } else if (headInjections && out.match(/<head[^>]*>/i)) {
+      out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${headInjections}`);
+    } else if (headInjections && !out.includes('<head')) {
       out = `<!DOCTYPE html>
 <html>
 <head>
-    ${injections}
+    ${headInjections}
 </head>
 <body>
 ${out}
@@ -386,7 +372,7 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
       }
     }
 
-    return `${injections}\n${out}`;
+    return out;
   };
 
   const stripViteModuleScripts = (html) => {
@@ -394,22 +380,108 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
     return input.replace(/<script[^>]*type=["']module["'][\s\S]*?<\/script>/gi, '');
   };
 
-  const isViteLike = Boolean(
-    files['/index.html'] &&
-      (files['/index.jsx'] ||
-        files['/index.tsx'] ||
-        files['/src/main.jsx'] ||
-        files['/src/main.tsx'] ||
-        files['/vite.config.js'])
+  const sandpackConfig = useMemo(() => {
+    const isViteLike = Boolean(
+      files['/index.html'] &&
+        (files['/index.jsx'] ||
+          files['/index.tsx'] ||
+          files['/src/main.jsx'] ||
+          files['/src/main.tsx'] ||
+          files['/vite.config.js'])
+    );
+
+    let sandpackFiles = files;
+    let entry;
+
+    if (isViteLike) {
+      const nextFiles = {};
+      const fallbackHtml = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Website</title>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>`;
+      const rawHtml = toSandboxCode(files['/index.html'] || '').trim();
+      nextFiles['/public/index.html'] = { code: ensureExternalStylesInHtml(stripViteModuleScripts(rawHtml || fallbackHtml)) };
+
+      Object.entries(files).forEach(([path, content]) => {
+        if (path === '/index.html') return;
+        if (path.startsWith('/public/') || path.startsWith('/src/')) {
+          nextFiles[path] = content;
+          return;
+        }
+        nextFiles[`/src${path}`] = content;
+      });
+
+      if (!nextFiles['/src/index.tsx'] && !nextFiles['/src/index.jsx'] && !nextFiles['/src/index.js']) {
+        if (nextFiles['/src/main.tsx']) {
+          nextFiles['/src/index.tsx'] = { code: `import "./main.tsx";` };
+        } else if (nextFiles['/src/main.jsx']) {
+          nextFiles['/src/index.jsx'] = { code: `import "./main.jsx";` };
+        }
+      }
+
+      const rewriteEntryCode = (code) => {
+        const input = typeof code === 'string' ? code : '';
+        return input
+          .replace(/from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'from "./App"')
+          .replace(/from\s+["']\.\/App["']/g, 'from "./App"')
+          .replace(/import\s+App\s+from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'import App from "./App"');
+      };
+
+      if (nextFiles['/src/index.tsx']) {
+        nextFiles['/src/index.tsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.tsx'])) };
+      } else if (nextFiles['/src/index.jsx']) {
+        nextFiles['/src/index.jsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.jsx'])) };
+      } else if (nextFiles['/src/index.js']) {
+        nextFiles['/src/index.js'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.js'])) };
+      }
+
+      sandpackFiles = nextFiles;
+      entry = nextFiles['/src/index.tsx']
+        ? '/src/index.tsx'
+        : nextFiles['/src/index.jsx']
+          ? '/src/index.jsx'
+          : nextFiles['/src/index.js']
+            ? '/src/index.js'
+            : Object.keys(nextFiles)[0] || '/src/index.js';
+    } else {
+      const entryCandidates = [
+        '/index.jsx',
+        '/index.tsx',
+        '/index.js',
+        '/src/main.jsx',
+        '/src/main.tsx',
+        '/src/index.jsx',
+        '/src/index.tsx',
+        '/src/index.js'
+      ];
+      entry = entryCandidates.find((path) => Boolean(files[path])) || Object.keys(files)[0] || '/index.js';
+    }
+
+    return { sandpackFiles, entry };
+  }, [files]);
+
+  const [liveFiles, setLiveFiles] = React.useState(sandpackConfig.sandpackFiles);
+  const sourceFilesHash = useMemo(
+    () => JSON.stringify(sandpackConfig.sandpackFiles || {}),
+    [sandpackConfig.sandpackFiles]
+  );
+  const liveFilesHash = useMemo(
+    () => JSON.stringify(liveFiles || {}),
+    [liveFiles]
   );
 
-      let sandpackFiles = files;
-      const [liveFiles, setLiveFiles] = React.useState(sandpackFiles);
-
-      // Keep liveFiles in sync with DB-driven files when workspace data changes
-      React.useEffect(() => {
-        setLiveFiles(sandpackFiles);
-      }, [JSON.stringify(sandpackFiles)]);
+  // Keep liveFiles in sync with DB-driven files when workspace data changes
+  React.useEffect(() => {
+    if (sourceFilesHash === liveFilesHash) return;
+    setLiveFiles(sandpackConfig.sandpackFiles);
+  }, [sourceFilesHash, liveFilesHash, sandpackConfig.sandpackFiles]);
 
       const MessageSyncHandler = ({ setLiveFiles }) => {
         React.useEffect(() => {
@@ -427,6 +499,11 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
                       next[key] = { code: content };
                     }
                   });
+                  try {
+                    if (JSON.stringify(prev || {}) === JSON.stringify(next)) {
+                      return prev;
+                    }
+                  } catch (e) {}
                   return next;
                 });
               }
@@ -438,83 +515,10 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
 
         return null;
       };
-  let entry;
-
-  if (isViteLike) {
-    const nextFiles = {};
-    const fallbackHtml = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Website</title>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`;
-    const rawHtml = toSandboxCode(files['/index.html'] || '').trim();
-    nextFiles['/public/index.html'] = { code: ensureExternalStylesInHtml(stripViteModuleScripts(rawHtml || fallbackHtml)) };
-
-    Object.entries(files).forEach(([path, content]) => {
-      if (path === '/index.html') return;
-      if (path.startsWith('/public/') || path.startsWith('/src/')) {
-        nextFiles[path] = content;
-        return;
-      }
-      nextFiles[`/src${path}`] = content;
-    });
-
-    if (!nextFiles['/src/index.tsx'] && !nextFiles['/src/index.jsx'] && !nextFiles['/src/index.js']) {
-      if (nextFiles['/src/main.tsx']) {
-        nextFiles['/src/index.tsx'] = { code: `import "./main.tsx";` };
-      } else if (nextFiles['/src/main.jsx']) {
-        nextFiles['/src/index.jsx'] = { code: `import "./main.jsx";` };
-      }
-    }
-
-    const rewriteEntryCode = (code) => {
-      const input = typeof code === 'string' ? code : '';
-      return input
-        .replace(/from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'from "./App"')
-        .replace(/from\s+["']\.\/App["']/g, 'from "./App"')
-        .replace(/import\s+App\s+from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'import App from "./App"');
-    };
-
-    if (nextFiles['/src/index.tsx']) {
-      nextFiles['/src/index.tsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.tsx'])) };
-    } else if (nextFiles['/src/index.jsx']) {
-      nextFiles['/src/index.jsx'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.jsx'])) };
-    } else if (nextFiles['/src/index.js']) {
-      nextFiles['/src/index.js'] = { code: rewriteEntryCode(toSandboxCode(nextFiles['/src/index.js'])) };
-    }
-
-    sandpackFiles = nextFiles;
-    entry = nextFiles['/src/index.tsx']
-      ? '/src/index.tsx'
-      : nextFiles['/src/index.jsx']
-        ? '/src/index.jsx'
-        : nextFiles['/src/index.js']
-          ? '/src/index.js'
-          : Object.keys(nextFiles)[0] || '/src/index.js';
-  } else {
-    const entryCandidates = [
-      '/index.jsx',
-      '/index.tsx',
-      '/index.js',
-      '/src/main.jsx',
-      '/src/main.tsx',
-      '/src/index.jsx',
-      '/src/index.tsx',
-      '/src/index.js'
-    ];
-    entry = entryCandidates.find((path) => Boolean(files[path])) || Object.keys(files)[0] || '/index.js';
-  }
-
   return (
     <div className="h-screen w-screen overflow-hidden bg-white">
       <SandpackProvider
-        key={sandpackKey}
+        key={id || 'preview'}
         files={liveFiles}
         template={template}
         theme="dark"
@@ -522,7 +526,7 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
           dependencies: {
             ...previewDependencies
           },
-          entry
+          entry: sandpackConfig.entry
         }}
         options={{
           externalResources: [

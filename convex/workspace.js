@@ -1,4 +1,5 @@
 import { v } from 'convex/values';
+import { paginationOptsValidator } from 'convex/server';
 import { mutation, query } from './_generated/server';
 
 export const CreateWorkspace = mutation({
@@ -83,22 +84,14 @@ export const UpdateFiles = mutation({
 export const ListWorkspacesByUser = query({
     args: {
         userId: v.string(),
-        limit: v.optional(v.number()),
+        paginationOpts: paginationOptsValidator,
     },
     handler: async (ctx, args) => {
-        const limit = typeof args.limit === 'number' ? args.limit : 24;
-        const results = await ctx.db
+        return await ctx.db
             .query('workspace')
             .withIndex('by_user_updated', (q) => q.eq('userId', args.userId))
             .order('desc')
-            .take(limit);
-
-        return results.map((item) => ({
-            _id: item._id,
-            title: item.title || 'Untitled Project',
-            createdAt: item.createdAt ?? 0,
-            updatedAt: item.updatedAt ?? item.createdAt ?? 0,
-        }));
+            .paginate(args.paginationOpts);
     }
 })
 
@@ -131,5 +124,25 @@ export const DeleteWorkspace = mutation({
         if (!existing || existing.userId !== args.userId) return null;
         await ctx.db.delete(args.workspaceId);
         return { success: true };
+    }
+})
+
+export const DeleteWorkspaces = mutation({
+    args: {
+        workspaceIds: v.array(v.id('workspace')),
+        userId: v.string(),
+    },
+    handler: async (ctx, args) => {
+        const uniqueWorkspaceIds = [...new Set(args.workspaceIds)];
+        let deletedCount = 0;
+
+        for (const workspaceId of uniqueWorkspaceIds) {
+            const existing = await ctx.db.get(workspaceId);
+            if (!existing || existing.userId !== args.userId) continue;
+            await ctx.db.delete(workspaceId);
+            deletedCount += 1;
+        }
+
+        return { success: true, deletedCount };
     }
 })

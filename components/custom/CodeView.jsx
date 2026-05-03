@@ -2051,7 +2051,7 @@ if (typeof window !== 'undefined') {
 }
 `;
         validated['/selector-helper.js'] = { code: selectorScript };
-        const entryCandidates = ['/index.jsx', '/index.tsx', '/index.js'];
+        const entryCandidates = ['/index.jsx', '/index.tsx', '/index.js', '/src/index.jsx', '/src/index.tsx', '/src/index.js'];
         const entryFile = entryCandidates.find(p => Boolean(validated[p]));
         if (entryFile) {
             const baseIndexCode = toSandboxCode(validated[entryFile]);
@@ -2167,8 +2167,6 @@ ${out}
 
             Object.entries(validatedFiles).forEach(([path, content]) => {
                 if (path === '/index.html') return;
-                // Exclude internal helper files from Sandpack preview
-                if (path === '/selector-helper.js') return;
                 if (path.startsWith('/public/') || path.startsWith('/src/')) {
                     nextFiles[path] = content;
                     return;
@@ -2186,7 +2184,9 @@ ${out}
 
             const rewriteEntryCode = (code) => {
                 const input = typeof code === 'string' ? code : '';
-                return input
+                const importLine = "import './selector-helper.js';";
+                const withImport = input.includes(importLine) ? input : `${importLine}\n${input}`;
+                return withImport
                     .replace(/from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'from "./App"')
                     .replace(/from\s+["']\.\/App["']/g, 'from "./App"')
                     .replace(/import\s+App\s+from\s+["']\.\/App\.(jsx|js|tsx|ts)["']/g, 'import App from "./App"');
@@ -2222,24 +2222,6 @@ ${out}
             entry = entryCandidates.find((path) => Boolean(validatedFiles[path])) || Object.keys(validatedFiles)[0] || '/index.js';
         }
 
-        // Filter out internal helper files from Sandpack files
-        const internalFiles = new Set(['/selector-helper.js', '/src/selector-helper.js']);
-        const cleanedSandpackFiles = {};
-        Object.entries(sandpackFiles).forEach(([path, content]) => {
-            if (!internalFiles.has(path)) {
-                let fileContent = content;
-                // Also remove import of selector-helper from entry files
-                if (typeof fileContent.code === 'string') {
-                    fileContent = {
-                        code: fileContent.code
-                            .replace(/^import\s+['"]\.\/selector-helper\.js['"];\s*\n?/m, '')
-                            .replace(/^import\s+['"]\.\/selector-helper\.js['"];?\s*$/m, '')
-                    };
-                }
-                cleanedSandpackFiles[path] = fileContent;
-            }
-        });
-        sandpackFiles = cleanedSandpackFiles;
 
         const desiredActive = typeof activeEditorFile === 'string' ? activeEditorFile : '';
         if (isViteLike) {
