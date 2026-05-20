@@ -1,36 +1,36 @@
-﻿"use client"
+"use client"
 import React from 'react';
 import { motion } from 'framer-motion';
 
 const testimonialsTop = [
     {
         content: "The prompts translate into clean, usable layouts instantly.",
-        author: "Sarah Chen",
-        role: "Product Designer"
+        author: "Umer Chitta",
+        role: "Charsi Designer"
     },
     {
         content: "The output is organized and easy to extend for real projects.",
-        author: "Michael Ross",
+        author: "Billo Rani",
         role: "Senior Developer"
     },
     {
         content: "UI decisions feel thoughtful and on-brand, not random.",
-        author: "Jessica Lee",
+        author: "Kalli Purana",
         role: "Freelance Developer"
     },
     {
         content: "Preview to edit flow is super smooth for quick iterations.",
-        author: "David Miller",
+        author: "Guddu Pathan",
         role: "Agency Lead"
     },
     {
         content: "Clean components and smart defaults without the noise.",
-        author: "Alex Thompson",
+        author: "Shafqat Cheema",
         role: "Frontend Engineer"
     },
     {
         content: "Feels like a senior designer helping live.",
-        author: "Priya Shah",
+        author: "Hania Amir",
         role: "Design Lead"
     }
 ];
@@ -38,32 +38,32 @@ const testimonialsTop = [
 const testimonialsBottom = [
     {
         content: "Our team aligns faster with these strong starting points.",
-        author: "Noah Brooks",
+        author: "Daniyal Zafar",
         role: "Product Manager"
     },
     {
         content: "Responsive layouts land right without extra tweaks.",
-        author: "Amina Yusuf",
+        author: "Mawra Hocane",
         role: "UI Engineer"
     },
     {
         content: "The structure is reliable and the styles are tasteful.",
-        author: "Leo Park",
+        author: "Fawad Khan",
         role: "Creative Technologist"
     },
     {
         content: "From idea to prototype in one sitting.",
-        author: "Isabella Cruz",
+        author: "Mahira Khan",
         role: "Founder"
     },
     {
         content: "It understands context better than most tools.",
-        author: "Omar Ali",
+        author: "Hamza Ali Abbasi",
         role: "Full-Stack Developer"
     },
     {
         content: "Great for client demos and quick feedback cycles.",
-        author: "Emily Carter",
+        author: "Ayeza Khan",
         role: "UX Consultant"
     }
 ];
