@@ -73,7 +73,7 @@ function ChatView() {
     const GetAiResponse = useCallback(async () => {
         setLoading(true);
         const safeMessages = Array.isArray(messages) ? messages : [];
-        
+        const latestUserMessage = [...safeMessages].reverse().find((msg) => msg.role === 'user');
         // Clean and truncate history to avoid huge payloads
         const cleanHistory = safeMessages.map(msg => {
             if (msg.role === 'ai') {
@@ -143,6 +143,27 @@ function ChatView() {
             });
         } catch (error) {
             console.error('Error getting AI response:', error);
+            const requestText = typeof latestUserMessage?.content === 'string'
+                ? latestUserMessage.content.trim()
+                : '';
+            const aiResp = {
+                role: 'ai',
+                content: requestText
+                    ? `I am working on: "${requestText.slice(0, 120)}". The chat response hit a temporary issue, but code generation can still continue.`
+                    : 'The chat response hit a temporary issue, but code generation can still continue.'
+            };
+            setMessages(prev => {
+                const base = Array.isArray(prev) ? prev : [];
+                const updated = [...base, aiResp];
+                if (userId) {
+                    UpdateMessages({
+                        messages: updated,
+                        workspaceId: id,
+                        userId
+                    });
+                }
+                return updated;
+            });
         } finally {
             setLoading(false);
         }

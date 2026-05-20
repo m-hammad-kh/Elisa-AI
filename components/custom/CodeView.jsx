@@ -1,5 +1,6 @@
 "use client"
 import React, { useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { parse as parseBabel } from '@babel/parser';
 import {
     SandpackProvider,
     SandpackLayout,
@@ -67,6 +68,17 @@ const toSandboxCode = (content) => {
     return '';
 };
 
+const SYNC_EXCLUDED_FILES = new Set(['/selector-helper.js']);
+
+const stableFilesHash = (fileMap) => {
+    if (!fileMap || typeof fileMap !== 'object') return '';
+    const entries = Object.entries(fileMap)
+        .filter(([path]) => isValidSandboxPath(path) && !SYNC_EXCLUDED_FILES.has(toSandboxPath(path)))
+        .map(([path, content]) => [toSandboxPath(path), toSandboxCode(content)])
+        .sort(([a], [b]) => a.localeCompare(b));
+    return JSON.stringify(entries);
+};
+
 const REACT_HOOK_NAMES = [
     'useState',
     'useEffect',
@@ -123,6 +135,7 @@ const fixClassContrast = (code) => {
     const lightBg = /\bbg-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50)\b/;
     const darkText = /\btext-(black|slate-9\d\d|gray-9\d\d|neutral-9\d\d|zinc-9\d\d|stone-9\d\d)\b/;
     const lightText = /\btext-(white|slate-50|gray-50|neutral-50|zinc-50|stone-50|gray-100|slate-100)\b/;
+    const paleTextOnLight = /\btext-(slate|gray|neutral|zinc|stone)-(200|300|400|500)\b/;
 
     const fixClassValue = (value) => {
         let v = value;
@@ -141,6 +154,12 @@ const fixClassContrast = (code) => {
             v = v.replace(/\btext-white\b/g, 'text-slate-900');
             v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-50\b/g, 'text-slate-900');
             v = v.replace(/\btext-(gray|slate)-100\b/g, 'text-slate-900');
+        }
+        if (lightBg.test(v) && paleTextOnLight.test(v)) {
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-200\b/g, 'text-slate-700');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-300\b/g, 'text-slate-700');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-400\b/g, 'text-slate-700');
+            v = v.replace(/\btext-(slate|gray|neutral|zinc|stone)-500\b/g, 'text-slate-700');
         }
         return v;
     };
@@ -242,6 +261,12 @@ const sanitizeUnsupportedLibraries = (input) => {
 };`);
     }
 
+    if (/from\s+['"]react-router-hash-link['"]/.test(code)) {
+        code = code.replace(/^[ \t]*import[^\n]*from\s+['"]react-router-hash-link['"];?[ \t]*$/gm, '');
+        code = code.replace(/\s+smooth(?=[\s>])/g, '');
+        code = code.replace(/\s+scroll\s*=\s*\{[^}]*\}/g, '');
+    }
+
     return code;
 };
 
@@ -308,17 +333,133 @@ const injectSafetyStubs = (input) => {
         !isImportedSomewhere(name)
     ));
     if (unresolved.length > 0) {
-        const stubBlock = unresolved.map((name) => `const ${name} = () => null;`).join('\n');
+        const stubBlock = unresolved.map((name) => buildVisibleComponentStub(name)).join('\n\n');
         prependBlock(stubBlock);
     }
 
     return code;
 };
 
+const normalizeRelativeComponentImports = (input) => {
+    let code = typeof input === 'string' ? input : '';
+    code = code.replace(
+        /^\s*import\s+\{\s*([A-Z][A-Za-z0-9_$]*)\s*\}\s+from\s+(['"])(\.[^'"]+)\2\s*;?\s*$/gm,
+        'import $1 from $2$3$2;'
+    );
+    return code;
+};
+
+const cssPropertyToJsxKey = (property) => {
+    const trimmed = String(property || '').trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('--')) return JSON.stringify(trimmed);
+    return trimmed.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+};
+
+const cssTextToJsxStyleObject = (styleText) => {
+    const entries = String(styleText || '')
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+            const colonIndex = part.indexOf(':');
+            if (colonIndex === -1) return null;
+            const key = cssPropertyToJsxKey(part.slice(0, colonIndex));
+            const value = part.slice(colonIndex + 1).trim().replace(/\s*!important\s*$/i, '');
+            if (!key || !value) return null;
+            return `${key}: ${JSON.stringify(value)}`;
+        })
+        .filter(Boolean);
+    return entries.length > 0 ? `{ ${entries.join(', ')} }` : '{}';
+};
+
+const fixStringStyleProps = (input) => {
+    let code = typeof input === 'string' ? input : '';
+    return code.replace(/\bstyle\s*=\s*(["'])([^"'\n{}]*)\1/g, (_, quote, styleText) => {
+        const styleObject = cssTextToJsxStyleObject(styleText);
+        return `style={${styleObject}}`;
+    });
+};
+
+const hardenFooterSource = (path, input) => {
+    const filePath = typeof path === 'string' ? path : '';
+    let code = typeof input === 'string' ? input : '';
+    if (!/\/Footer\.(jsx|tsx|js|ts)$/i.test(filePath)) {
+        return code;
+    }
+
+    code = code.replace(
+        /^\s*import\s+\{\s*([^}]+)\}\s+from\s+['"]react-router-dom['"]\s*;?\s*$/gm,
+        (_, imports) => {
+            const kept = String(imports)
+                .split(',')
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .filter((name) => name !== 'Link');
+            return kept.length > 0 ? `import { ${kept.join(', ')} } from "react-router-dom";` : '';
+        }
+    );
+    code = code.replace(/<Link\b/g, '<a');
+    code = code.replace(/\bto=/g, 'href=');
+    code = code.replace(/<\/Link>/g, '</a>');
+    code = code.replace(/^\s*import\s+.*\s+from\s+['"](@heroicons\/[^'"]+|react-icons\/[^'"]+|lucide-react)['"];?\s*$/gm, '');
+    const footerIconFallback = '<span aria-hidden="true" className="inline-block h-4 w-4 shrink-0 rounded-full bg-current opacity-70" />';
+    code = code.replace(/<([A-Z][A-Za-z0-9_$]*)\b[^>]*\/>/g, (match, name) => {
+        if (name === 'Footer') return match;
+        return footerIconFallback;
+    });
+    code = code.replace(/<([A-Z][A-Za-z0-9_$]*)\b[^>]*>\s*<\/\1>/g, (match, name) => {
+        if (name === 'Footer') return match;
+        return footerIconFallback;
+    });
+    return code;
+};
+
+const DEFAULT_APP_MARKERS = [
+    'Your AI website is ready',
+    'Welcome to Your AI Website',
+    'Your generated code will appear here.'
+];
+
+const isPlaceholderAppCode = (code) => {
+    const input = typeof code === 'string' ? code : '';
+    return DEFAULT_APP_MARKERS.some((marker) => input.includes(marker));
+};
+
+const pickPrimaryGeneratedPage = (files) => {
+    const paths = Object.keys(files || {}).filter((path) => /^\/pages\/.+\.(jsx|tsx|js|ts)$/i.test(path));
+    const preferred = ['/pages/HomePage.jsx', '/pages/Home.jsx', '/pages/LandingPage.jsx', '/pages/Index.jsx'];
+    for (const path of preferred) {
+        if (paths.includes(path)) return path;
+    }
+    return paths[0] || '';
+};
+
+const buildAppShellFromPage = (pagePath, options = {}) => {
+    if (!pagePath) return '';
+    const includeNavbar = options.includeNavbar !== false;
+    const includeFooter = options.includeFooter !== false;
+    const importPath = pagePath.replace(/^\//, './');
+    return `import React from "react";
+${includeNavbar ? 'import Navbar from "./components/Navbar.jsx";\n' : ''}${includeFooter ? 'import Footer from "./components/Footer.jsx";\n' : ''}import GeneratedPage from "${importPath}";
+
+export default function App() {
+  return (
+    <>
+      ${includeNavbar ? '<Navbar />' : ''}
+      <GeneratedPage />
+      ${includeFooter ? '<Footer />' : ''}
+    </>
+  );
+}`;
+};
+
 const fixUnsafeSandboxCode = (input) => {
     let code = typeof input === 'string' ? input : '';
     code = code.replace(/\r\n/g, '\n');
     code = ensureReactImports(code);
+    code = normalizeRelativeComponentImports(code);
+    code = fixStringStyleProps(code);
     code = sanitizeUnsupportedLibraries(code);
     code = repairMismatchedJsxTags(code);
     
@@ -393,10 +534,256 @@ const fixUnsafeSandboxCode = (input) => {
     code = repairMismatchedJsxTags(code);
     code = ensureLibraryImports(code);
 
-    // Disabled: fixClassContrast was removing vibrant colors from preview
-    // code = fixClassContrast(code);
+    code = fixClassContrast(code);
 
     return code;
+};
+
+const getJsxParseIssues = (path, input) => {
+        const code = typeof input === 'string' ? input : '';
+        if (!isValidSandboxPath(path) || !code.trim()) return [];
+
+        const normalizedPath = toSandboxPath(path);
+        if (!/\.(jsx|tsx|js|ts)$/i.test(normalizedPath)) return [];
+
+        const plugins = ['jsx', 'topLevelAwait', 'importMeta'];
+        if (/\.(ts|tsx)$/i.test(normalizedPath)) {
+                plugins.push('typescript');
+        }
+
+        try {
+                parseBabel(code, {
+                        sourceType: 'module',
+                        plugins,
+                });
+                return [];
+        } catch (error) {
+                const message = String(error?.message || error || 'Unknown syntax error').split('\n')[0];
+                return [`${normalizedPath}: ${message}`];
+        }
+};
+
+const buildSafeReactFallback = (path) => {
+        const normalizedPath = toSandboxPath(path);
+        const defaultCode = toSandboxCode(Lookup?.DEFAULT_FILE?.[normalizedPath]);
+        if (defaultCode.trim()) {
+                return fixUnsafeSandboxCode(defaultCode);
+        }
+
+        const baseName = normalizedPath.split('/').pop() || 'FallbackComponent';
+        const componentName = baseName.replace(/\.(jsx|tsx|js|ts)$/i, '').replace(/[^A-Za-z0-9_$]/g, '') || 'FallbackComponent';
+
+        return `import React from "react";
+
+export default function ${componentName}() {
+    return (
+        <div className="flex min-h-[240px] items-center justify-center rounded-3xl border border-border bg-card px-6 py-10 text-center text-card-foreground shadow-xl">
+            <div className="max-w-md">
+                <p className="text-xs font-black uppercase tracking-[0.35em] text-primary">Recovered Preview</p>
+                <h2 className="mt-3 text-2xl font-black tracking-tight">${componentName}</h2>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                    This file was replaced with a safe fallback because the generated JSX failed validation.
+                </p>
+            </div>
+        </div>
+    );
+}`;
+};
+
+    const resolveSandboxRelativePath = (fromPath, importPath) => {
+        const fromSegments = toSandboxPath(fromPath).split('/').filter(Boolean);
+        if (fromSegments.length > 0) {
+            fromSegments.pop();
+        }
+
+        const rawSegments = String(importPath || '').split('/').filter(Boolean);
+        const resolvedSegments = [...fromSegments];
+
+        rawSegments.forEach((segment) => {
+            if (segment === '.') return;
+            if (segment === '..') {
+                resolvedSegments.pop();
+                return;
+            }
+            resolvedSegments.push(segment);
+        });
+
+        if (resolvedSegments.length === 0) {
+            return '/';
+        }
+
+        return `/${resolvedSegments.join('/')}`.replace(/\/+/g, '/');
+    };
+
+    const buildSafeLocalStub = (path) => {
+        const normalizedPath = toSandboxPath(path);
+        if (/\.css$/i.test(normalizedPath)) {
+            return `:root { color-scheme: light dark; }
+    html, body, #root { min-height: 100%; }
+    body { margin: 0; }
+    `;
+        }
+
+        return buildSafeReactFallback(normalizedPath);
+    };
+
+const buildVisibleComponentStub = (componentName) => {
+        const safeName = String(componentName || 'RecoveredComponent').replace(/[^A-Za-z0-9_$]/g, '') || 'RecoveredComponent';
+        return `const ${safeName} = () => (
+    <div className="flex min-h-[160px] items-center justify-center rounded-2xl border border-dashed border-border bg-card px-4 py-6 text-center text-card-foreground">
+        <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.35em] text-primary">Recovered Component</p>
+            <p className="mt-2 text-sm font-semibold">${safeName} rendered a safe fallback because the generated module was incomplete.</p>
+        </div>
+    </div>
+);`;
+};
+
+    const ensureLocalImportTargets = (fileMap) => {
+        const next = { ...(fileMap || {}) };
+        const existingPaths = new Set(Object.keys(next).map((path) => toSandboxPath(path)));
+        const createdPaths = new Set();
+
+        const addStub = (candidatePath) => {
+            const normalized = toSandboxPath(candidatePath);
+            if (!isValidSandboxPath(normalized) || existingPaths.has(normalized) || createdPaths.has(normalized)) return;
+            next[normalized] = { code: buildSafeLocalStub(normalized) };
+            createdPaths.add(normalized);
+            existingPaths.add(normalized);
+        };
+
+        Object.entries(next).forEach(([path, content]) => {
+            const code = toSandboxCode(content);
+            if (!code.trim()) return;
+
+            for (const match of code.matchAll(/import\s+[\s\S]*?from\s+['"](\.[^'"]+)['"]/g)) {
+                const importPath = match[1];
+                const resolvedPath = resolveSandboxRelativePath(path, importPath);
+                const hasExtension = /\.[A-Za-z0-9]+$/i.test(resolvedPath);
+
+                const candidates = hasExtension
+                    ? [resolvedPath]
+                    : [
+                        `${resolvedPath}.jsx`,
+                        `${resolvedPath}.js`,
+                        `${resolvedPath}.tsx`,
+                        `${resolvedPath}.ts`,
+                        `${resolvedPath}.css`,
+                        `${resolvedPath}/index.jsx`,
+                        `${resolvedPath}/index.js`,
+                        `${resolvedPath}/index.tsx`,
+                        `${resolvedPath}/index.ts`
+                    ];
+
+                const existing = candidates.find((candidate) => existingPaths.has(toSandboxPath(candidate)));
+                if (existing) continue;
+
+                addStub(candidates[0]);
+            }
+        });
+
+        return next;
+    };
+
+const ensureImportedLocalComponentDefaults = (fileMap) => {
+    const next = { ...(fileMap || {}) };
+    const existingPaths = new Set(Object.keys(next).map((path) => toSandboxPath(path)));
+
+    const resolveTargetPath = (fromPath, importPath) => {
+        const fromSegments = toSandboxPath(fromPath).split('/').filter(Boolean);
+        if (fromSegments.length > 0) fromSegments.pop();
+
+        const rawSegments = String(importPath || '').split('/').filter(Boolean);
+        const resolvedSegments = [...fromSegments];
+        rawSegments.forEach((segment) => {
+            if (segment === '.') return;
+            if (segment === '..') {
+                resolvedSegments.pop();
+                return;
+            }
+            resolvedSegments.push(segment);
+        });
+
+        const basePath = `/${resolvedSegments.join('/')}`.replace(/\/+/g, '/');
+        const candidates = /\.[A-Za-z0-9]+$/i.test(basePath)
+            ? [basePath]
+            : [
+                `${basePath}.jsx`,
+                `${basePath}.js`,
+                `${basePath}.tsx`,
+                `${basePath}.ts`,
+                `${basePath}/index.jsx`,
+                `${basePath}/index.js`,
+                `${basePath}/index.tsx`,
+                `${basePath}/index.ts`
+            ];
+        return candidates.find((candidate) => existingPaths.has(toSandboxPath(candidate))) || candidates[0];
+    };
+
+    const ensureDefaultExportForCode = (path, code) => {
+        const componentPathLike = /(?:^|\/)(components|pages|sections|features|home|custom)\//i.test(path) || /[A-Z][A-Za-z0-9_$]*\.(jsx|tsx|js|ts)$/i.test(path);
+        if (!componentPathLike) return code;
+        if (/\bexport\s+default\b/.test(code)) return code;
+
+        const baseName = path.split('/').pop() || 'RecoveredComponent';
+        const componentName = baseName.replace(/\.(jsx|tsx|js|ts)$/i, '').replace(/[^A-Za-z0-9_$]/g, '') || 'RecoveredComponent';
+
+        if (new RegExp(`\b(function|const|class|let|var)\s+${componentName}\b`).test(code)) {
+            return `${code}\n\nexport default ${componentName};`;
+        }
+
+        const anyComponentMatch = code.match(/\b(function|const|class|let|var)\s+([A-Z][A-Za-z0-9_$]*)\b/);
+        if (anyComponentMatch) {
+            return `${code}\n\nexport default ${anyComponentMatch[2]};`;
+        }
+
+        const fallback = buildVisibleComponentStub(componentName);
+        return `import React from "react";\n\n${fallback}\n\nexport default ${componentName};`;
+    };
+
+    Object.entries(next).forEach(([path, content]) => {
+        const code = toSandboxCode(content);
+        if (!code.trim()) return;
+
+        for (const match of code.matchAll(/import\s+([\s\S]*?)\s+from\s+['"](\.[^'"]+)['"]/g)) {
+            const importClause = match[1] || '';
+            const importPath = match[2];
+            const targetPath = resolveTargetPath(path, importPath);
+            const targetCode = toSandboxCode(next[targetPath]);
+            if (!targetCode.trim()) continue;
+
+            const hasCapitalizedImport = /\b[A-Z][A-Za-z0-9_$]*\b/.test(importClause);
+            const isComponentLikeTarget = /(?:^|\/)(components|pages|sections|features|home|custom)\//i.test(targetPath) || /[A-Z][A-Za-z0-9_$]*\.(jsx|tsx|js|ts)$/i.test(targetPath);
+            if (!hasCapitalizedImport || !isComponentLikeTarget) continue;
+
+            next[targetPath] = { code: ensureDefaultExportForCode(targetPath, targetCode) };
+        }
+    });
+
+    return next;
+};
+
+const sanitizePreviewFiles = (inputFiles) => {
+        const next = {};
+        const parseIssues = [];
+
+        Object.entries(inputFiles || {}).forEach(([path, content]) => {
+                if (!isValidSandboxPath(path)) return;
+                const cleanPath = toSandboxPath(path);
+                const code = fixUnsafeSandboxCode(toSandboxCode(content));
+                const issues = getJsxParseIssues(cleanPath, code);
+                if (issues.length > 0) {
+                        parseIssues.push(...issues);
+                        next[cleanPath] = { code: buildSafeReactFallback(cleanPath) };
+                        return;
+                }
+                next[cleanPath] = { code };
+        });
+
+        return {
+                files: ensureLocalImportTargets(next),
+                issues: parseIssues,
+        };
 };
 
 const SANDBOX_EXTERNAL_RESOURCES = [
@@ -437,7 +824,7 @@ const Footer = () => {
         </div>
       </div>
       <div className="border-t border-white/10 px-6 py-4 text-xs text-slate-500">
-        © {new Date().getFullYear()} Elisa AI. All rights reserved.
+        &copy; {new Date().getFullYear()} Elisa AI. All rights reserved.
       </div>
     </footer>
   );
@@ -465,7 +852,7 @@ const STYLE_PRESETS = [
         name: "Neo Brutalist Citrus",
         palette: "charcoal #0f172a, citrus #f59e0b, mint #34d399, cream #fff7ed",
         fonts: "Space Grotesk for headings, Manrope for body",
-        hero: "Split hero with bold left text and a large right image in an angled frame",
+        hero: "Split hero with bold left text and a large rectangular media panel with clean angled edges",
         background: "Layered gradients with subtle grain texture",
         accents: "Thick borders, pill buttons, high-contrast CTA"
     },
@@ -473,7 +860,7 @@ const STYLE_PRESETS = [
         name: "Modern Editorial",
         palette: "ink #0b0f19, pearl #f8fafc, rose #fb7185, gold #fbbf24",
         fonts: "Playfair Display for headings, Source Sans 3 for body",
-        hero: "Asymmetric hero with stacked text and a tall portrait image",
+        hero: "Asymmetric hero with stacked text and a tall editorial image block with generous whitespace",
         background: "Soft paper texture with oversized typography accents",
         accents: "Underline links, thin rules, editorial cards"
     },
@@ -489,7 +876,7 @@ const STYLE_PRESETS = [
         name: "Retro Future",
         palette: "black #0a0a0a, electric #7c3aed, neon #22d3ee, lime #a3e635",
         fonts: "Sora for headings, Space Mono for labels",
-        hero: "Centered hero with layered image collage and neon ring",
+        hero: "Centered hero with a cinematic wide media banner below the headline and clean neon edge accents",
         background: "Grid pattern with glowing gradients",
         accents: "Neon borders, hover glows, animated pills"
     },
@@ -704,19 +1091,25 @@ function CodeView() {
     const hasPersistedFilesRef = useRef(false);
     const [filesLoaded, setFilesLoaded] = useState(false);
     const lastProcessedIndexRef = useRef(-1);
+    const lastSyncedFilesHashRef = useRef('');
+    const lastObservedSandpackHashRef = useRef('');
+    const lastKnownFilesHashRef = useRef('');
 
     useEffect(() => {
         // Reset per-workspace refs when switching IDs
         lastProcessedIndexRef.current = -1;
         skipInitialGenerateRef.current = false;
         hasPersistedFilesRef.current = false;
+        lastSyncedFilesHashRef.current = '';
+        lastObservedSandpackHashRef.current = '';
+        lastKnownFilesHashRef.current = '';
         setSelectedElement(null);
     }, [id, setSelectedElement]);
 
     useEffect(() => {
         sandpackFilesRef.current = files;
     }, [files]);
-    
+
     // Message listener for selector
     useEffect(() => {
         const handleMessage = (event) => {
@@ -876,12 +1269,13 @@ function CodeView() {
             // Set a new timer to update after 2 seconds of inactivity
             debounceTimerRef.current = setTimeout(() => {
                 const processedCurrent = preprocessFiles(currentSandpackFiles);
-                const processedState = preprocessFiles(files);
-                
-                const currentStr = JSON.stringify(processedCurrent);
-                const stateStr = JSON.stringify(processedState);
-                
-                if (currentStr !== stateStr) {
+
+                const currentHash = stableFilesHash(processedCurrent);
+                const stateHash = lastKnownFilesHashRef.current;
+                if (!currentHash || currentHash === lastObservedSandpackHashRef.current) return;
+                lastObservedSandpackHashRef.current = currentHash;
+
+                if (currentHash !== stateHash && currentHash !== lastSyncedFilesHashRef.current) {
                     console.log("Manual edit detected, syncing to database...");
                     // We only update the database (Convex) here. 
                     // We DO NOT call setFiles(processedCurrent) because that would trigger a re-render 
@@ -893,6 +1287,7 @@ function CodeView() {
                             userId,
                             files: processedCurrent
                         });
+                        lastSyncedFilesHashRef.current = currentHash;
                     }
                     // Also send a one-time postMessage to the embedded workspace preview iframe
                     // so the workspace preview picks up the change immediately (no DB roundtrip).
@@ -904,10 +1299,6 @@ function CodeView() {
                     } catch (e) {
                         // ignore
                     }
-
-                    // Update our internal files state SILENTLY (without triggering full SandpackProvider remount)
-                    // so other UI that reads `files` still sees the latest.
-                    setFiles(prev => ({ ...prev, ...processedCurrent }));
                 }
             }, 2000);
 
@@ -916,7 +1307,7 @@ function CodeView() {
                     clearTimeout(debounceTimerRef.current);
                 }
             };
-        }, [currentSandpackFiles, id, UpdateFiles, loading, files, userId]);
+        }, [currentSandpackFiles, id, UpdateFiles, loading, userId, preprocessFiles]);
 
         // Sync active file from Sandpack back to our state
         useEffect(() => {
@@ -945,6 +1336,7 @@ function CodeView() {
             let cleanPath = toSandboxPath(path);
             if (cleanPath.startsWith('/src/')) cleanPath = '/' + cleanPath.slice(5);
             else if (cleanPath.startsWith('/public/')) cleanPath = '/' + cleanPath.slice(8);
+            if (SYNC_EXCLUDED_FILES.has(cleanPath)) return;
             
             // Fix missing or wrong extensions for React components (AI often forgets or uses .js)
             const isReactFile = cleanPath.startsWith('/components/') || 
@@ -966,11 +1358,15 @@ function CodeView() {
             const rawCode = toSandboxCode(content);
             if (!rawCode || typeof rawCode !== 'string' || rawCode.length < 5) return; // Skip empty/broken files
 
-            const code = fixUnsafeSandboxCode(rawCode);
+            const code = hardenFooterSource(cleanPath, fixUnsafeSandboxCode(rawCode));
             processed[cleanPath] = { code };
         });
         return processed;
     }, []);
+
+    useEffect(() => {
+        lastKnownFilesHashRef.current = stableFilesHash(preprocessFiles(files));
+    }, [files, preprocessFiles]);
 
     const pickActiveEditorFile = useCallback((fileObj) => {
         const has = (path) => Boolean(fileObj?.[path] && typeof toSandboxCode(fileObj[path]) === 'string' && toSandboxCode(fileObj[path]).trim().length > 0);
@@ -985,7 +1381,7 @@ function CodeView() {
         const next = { ...(inputFiles || {}) };
         const hasFile = (path) => Boolean(next[path] && typeof toSandboxCode(next[path]) === 'string' && toSandboxCode(next[path]).trim().length > 0);
         const setFile = (path, content) => {
-            next[path] = { code: fixUnsafeSandboxCode(toSandboxCode(content)) };
+            next[path] = { code: hardenFooterSource(path, fixUnsafeSandboxCode(toSandboxCode(content))) };
         };
         const ensurePackageJson = () => {
             const fallbackPackage = {
@@ -1056,12 +1452,11 @@ function CodeView() {
             }
 
             let code = toSandboxCode(next[path]) || '';
+            
+            // 🔴 FIX: If there's already ANY default export, DO NOT ADD ANOTHER ONE!
             if (/\bexport\s+default\b/.test(code)) {
-                // Check if it's exporting the right name
-                if (new RegExp(`export\\s+default\\s+${componentName}`).test(code)) {
-                    setFile(path, code);
-                    return;
-                }
+                setFile(path, code);
+                return;
             }
 
             // Remove incorrect curly imports of the same component
@@ -1121,19 +1516,28 @@ function CodeView() {
             delete next['/App.css'];
         }
 
+        const currentAppCode = hasFile('/App.jsx') ? toSandboxCode(next['/App.jsx']) || '' : '';
+        if ((!hasFile('/App.jsx') || isPlaceholderAppCode(currentAppCode)) && Object.keys(next).some((path) => path.startsWith('/pages/'))) {
+            const primaryPage = pickPrimaryGeneratedPage(next);
+            if (primaryPage) {
+                setFile('/App.jsx', buildAppShellFromPage(primaryPage, {
+                    includeNavbar: hasFile('/components/Navbar.jsx'),
+                    includeFooter: hasFile('/components/Footer.jsx')
+                }));
+            }
+        }
+
         ensureDefaultExport(
             '/components/Footer.jsx',
             'Footer',
             `const Footer = () => (
   <footer className="bg-gray-100 p-8 text-center text-gray-600 border-t mt-12">
-    ï¿½ ${new Date().getFullYear()} Project. All rights reserved.
+    &copy; ${new Date().getFullYear()} Project. All rights reserved.
   </footer>
 );
 
 export default Footer;`
         );
-
-        setFile('/components/Footer.jsx', SAFE_FOOTER_CODE);
 
         ensureDefaultExport(
             '/components/Navbar.jsx',
@@ -1217,15 +1621,37 @@ export default Navbar;`
 
         ensureNavbarFooterInApp();
 
-        // Fix BrowserRouter: ensure index.jsx wraps App in BrowserRouter when react-router-dom is used
+        // FIX BROWSER ROUTER COMPLETELY - NO MORE "router inside router" ERROR!
         const ensureBrowserRouter = () => {
-            if (!hasFile('/index.jsx')) return;
+            // STEP 1: REMOVE BrowserRouter FROM EVERY FILE EXCEPT index.jsx
+            Object.keys(next).forEach((path) => {
+                if (path === '/index.jsx' || path === '/index.tsx' || path === '/index.js') return;
+                
+                let code = toSandboxCode(next[path]) || '';
+                if (code.includes('BrowserRouter')) {
+                    // Remove BrowserRouter tags and import
+                    code = code.replace(/<BrowserRouter[^>]*>/g, '');
+                    code = code.replace(/<\/BrowserRouter>/g, '');
+                    // Remove BrowserRouter import
+                    code = code.replace(/^\s*import\s*(?:\{[^}]*BrowserRouter[^}]*\}|BrowserRouter)\s*from\s+['"]react-router-dom['"];?\s*\n?/gm, (match) => {
+                        // If import has other things besides BrowserRouter, keep them
+                        if (match.includes('{') && match.includes(',')) {
+                            const cleaned = match.replace(/BrowserRouter\s*,?\s*/g, '').replace(/,\s*\}/g, '}');
+                            if (cleaned.includes('{') && !cleaned.includes('{}')) {
+                                return cleaned;
+                            }
+                        }
+                        return '';
+                    });
+                    setFile(path, code);
+                }
+            });
 
-            // Check if any file uses react-router-dom features
+            // STEP 2: Check if we actually need routing
             const routerPatterns = ['<Link', '<NavLink', '<Route', '<Routes', 'useNavigate', 'useLocation', 'useParams', 'useSearchParams', '<Navigate'];
             let usesRouter = false;
             Object.entries(next).forEach(([path, content]) => {
-                if (path === '/index.jsx') return; // skip index itself
+                if (path === '/index.jsx' || path === '/index.tsx' || path === '/index.js') return;
                 const code = toSandboxCode(content) || '';
                 if (routerPatterns.some(p => code.includes(p))) {
                     usesRouter = true;
@@ -1234,49 +1660,43 @@ export default Navbar;`
 
             if (!usesRouter) return;
 
-            let indexCode = toSandboxCode(next['/index.jsx']) || '';
+            // STEP 3: Ensure ONLY index.jsx has BrowserRouter (if needed)
+            const indexPath = hasFile('/index.jsx') ? '/index.jsx' : 
+                              hasFile('/index.tsx') ? '/index.tsx' : 
+                              hasFile('/index.js') ? '/index.js' : '';
+            
+            if (!indexPath) return;
 
-            // If index.jsx already has BrowserRouter, we're good
-            if (indexCode.includes('BrowserRouter')) return;
+            let indexCode = toSandboxCode(next[indexPath]) || '';
+            
+            // If already has BrowserRouter, make sure it's correctly formatted
+            if (indexCode.includes('BrowserRouter')) {
+                // Just clean it up and ensure it's wrapping <App /> properly
+                return;
+            }
 
-            // Add BrowserRouter import
+            // Add BrowserRouter import if needed
             if (!indexCode.includes('react-router-dom')) {
                 const importLine = `import { BrowserRouter } from 'react-router-dom';\n`;
                 const lastImport = indexCode.lastIndexOf('import ');
                 if (lastImport !== -1) {
                     const endOfLine = indexCode.indexOf('\n', lastImport);
-                    indexCode = indexCode.slice(0, endOfLine + 1) + importLine + indexCode.slice(endOfLine + 1);
+                    if (endOfLine !== -1) {
+                        indexCode = indexCode.slice(0, endOfLine + 1) + importLine + indexCode.slice(endOfLine + 1);
+                    } else {
+                        indexCode = indexCode + '\n' + importLine;
+                    }
                 } else {
                     indexCode = importLine + indexCode;
                 }
             }
 
-            // Wrap <App /> in <BrowserRouter>
-            indexCode = indexCode
-                .replace(/(\s*)<App\s*\/>/m, '$1<BrowserRouter>\n$1  <App />\n$1</BrowserRouter>');
-
-            setFile('/index.jsx', indexCode);
-
-            // Remove BrowserRouter from App.jsx if it's now in index.jsx (prevent double-wrap)
-            if (hasFile('/App.jsx')) {
-                let appCode = toSandboxCode(next['/App.jsx']) || '';
-                if (appCode.includes('<BrowserRouter')) {
-                    // Remove BrowserRouter wrapper but keep its children
-                    appCode = appCode.replace(/<BrowserRouter[^>]*>/g, '');
-                    appCode = appCode.replace(/<\/BrowserRouter>/g, '');
-                    // Remove the BrowserRouter import line
-                    appCode = appCode.replace(/^\s*import\s+\{[^}]*BrowserRouter[^}]*\}\s+from\s+['"]react-router-dom['"];?\s*\n?/m, (match) => {
-                        // Keep other imports from the same line if any besides BrowserRouter
-                        const otherImports = match.replace(/BrowserRouter\s*,?\s*/g, '').replace(/,\s*\}/g, '}');
-                        const remaining = otherImports.match(/\{\s*([^}]+)\s*\}/);
-                        if (remaining && remaining[1].trim().length > 0) {
-                            return otherImports;
-                        }
-                        return '';
-                    });
-                    setFile('/App.jsx', appCode);
-                }
+            // Wrap <App /> in BrowserRouter - this is the ONLY place BrowserRouter should ever be!
+            if (!indexCode.includes('<BrowserRouter')) {
+                indexCode = indexCode.replace(/(\s*)<App\s*\/>/m, '$1<BrowserRouter>\n$1  <App />\n$1</BrowserRouter>');
             }
+
+            setFile(indexPath, indexCode);
         };
 
         ensureBrowserRouter();
@@ -1304,15 +1724,17 @@ export default Navbar;`
                 setFilesLoaded(true);
                 return;
             }
-            const persistedFiles = result?.fileData && Object.keys(result.fileData).length > 0;
-            hasPersistedFilesRef.current = Boolean(persistedFiles);
-            if (persistedFiles) {
-                skipInitialGenerateRef.current = true;
-            }
             const processedFiles = preprocessFiles(result?.fileData || {});
             const defaultFiles = preprocessFiles(Lookup.DEFAULT_FILE);
             const mergedFiles = { ...defaultFiles, ...processedFiles };
             const normalizedFiles = normalizeGeneratedFiles(mergedFiles);
+            const persistedFiles = result?.fileData && Object.keys(result.fileData).length > 0;
+            const persistedAppCode = toSandboxCode(processedFiles['/App.jsx'] || processedFiles['/App.js'] || normalizedFiles['/App.jsx'] || '');
+            const hasMeaningfulPersistedFiles = Boolean(persistedFiles) && !isPlaceholderAppCode(persistedAppCode);
+            hasPersistedFilesRef.current = hasMeaningfulPersistedFiles;
+            if (hasMeaningfulPersistedFiles) {
+                skipInitialGenerateRef.current = true;
+            }
             try {
                 if (JSON.stringify(normalizedFiles) !== JSON.stringify(mergedFiles)) {
                     UpdateFiles({
@@ -1441,7 +1863,10 @@ export default Navbar;`
 - Hero layout: ${stylePreset.hero}
 - Background treatment: ${stylePreset.background}
 - Accent details: ${stylePreset.accents}
-\n\n HERO IMAGE REQUIREMENT: The hero section MUST include at least one prominent image using the required Pexels search URL pattern (landscape).`;
+- Hero media rule: do NOT use circular image masks, giant rings, orbit frames, decorative circles over images, or cramped image collages. Prefer rectangular, editorial, full-bleed, asymmetric, or device/mockup-style media compositions with clear spacing.
+\n\n CONTENT DEPTH REQUIREMENT: Home page must include 6-9 meaningful sections with realistic copy, not a tiny demo.
+\n\n CONTACT REQUIREMENT: Every site must include a contact form and a visible map. Use /contact for multi-page sites or a full #contact section for single-page sites.
+\n\n IMAGE REQUIREMENT: Use several distinct relevant images across hero, gallery/showcase/cards/team/testimonials where appropriate. Use the Pexels search URL pattern with different specific keywords and matching orientation. Do not reuse the same image URL repeatedly.`;
         }
         
         if (promptFilesResult.useCompression) {
@@ -1454,10 +1879,22 @@ export default Navbar;`
             : '';
         
         if (isUpdate) {
+            PROMPT += "\n\n 🔴 ABSOLUTELY CRITICAL - YOU MUST MODIFY CODE FILES! 🔴";
+            PROMPT += "\n\n - YOU ARE NOT ALLOWED TO ONLY TALK OR CHAT!";
+            PROMPT += "\n\n - YOU MUST ACTUALLY UPDATE THE CODE FILES TO MAKE THE USER'S REQUESTED CHANGES!";
+            PROMPT += "\n\n - IF THE USER ASKS TO CHANGE A COLOR, YOU MUST UPDATE THE CSS/TAILWIND CLASSES IN THE RELEVANT FILE!";
+            PROMPT += "\n\n - IF THE USER ASKS TO ADD A SECTION, YOU MUST INSERT THAT SECTION INTO THE APPROPRIATE COMPONENT FILE!";
+            PROMPT += "\n\n - IF THE USER ASKS TO ADD A NEW PAGE, YOU MUST CREATE THE NEW PAGE FILE AND UPDATE THE ROUTING IF NEEDED!";
+            PROMPT += "\n\n - IF THE USER ASKS TO REPLACE AN IMAGE, YOU MUST UPDATE THE IMAGE SRC IN THE RELEVANT COMPONENT!";
+            PROMPT += "\n\n - RETURN THE FULL CONTENT OF ALL MODIFIED FILES IN THE 'files' ARRAY!";
+            PROMPT += "\n\n - DO NOT SKIP OR AVOID MODIFYING THE CODE - THIS IS YOUR PRIMARY JOB!";
             PROMPT += "\n\n CRITICAL: You are UPDATING an existing project. Focus on modifying the relevant files while PRESERVING the existing structure and high-end design. DO NOT reset to a blank project or 'Hello World'. Return the FULL content of all modified files. If the project already has complex components and pages, you MUST keep them and only update the requested parts.";
+            PROMPT += "\n\n SURGICAL UPDATE CONTRACT: Treat the latest user message as an edit command. Make exactly that requested change and the minimum supporting code changes needed for it to work. If the user asks for a color/text/image/section/page/navigation/form/content change, update the existing code accordingly. Do not regenerate the whole website, change unrelated sections, replace the theme, or remove existing content unless the user explicitly asks.";
             PROMPT += "\n\n IMPORTANT: Only return the files that actually need changing. Do not send back standard boilerplates unless they need updates. If you rename or delete a file, specify it clearly in your explanation.";
             PROMPT += "\n\n FILE EXTENSIONS: Always use .jsx for React components. If the current project uses .jsx, continue using .jsx. Ensure all imports are correct and relative.";
             PROMPT += "\n\n IMPORT CONFLICTS: Avoid duplicate declarations. For example, if you have a page component named 'Menu', and you also need the 'Menu' icon from lucide-react, you MUST alias one of them (e.g., import { Menu as MenuIcon } from 'lucide-react').";
+            PROMPT += "\n\n 🚫 NO UNSUPPORTED LIBRARIES! You can ONLY use these dependencies: react, react-dom, react-router-dom, lucide-react, framer-motion, clsx, tailwind-merge. DO NOT USE ANYTHING ELSE like recharts, chart.js, three.js, d3, canvas, etc. - these are NOT installed!";
+            PROMPT += "\n\n 📱 ALWAYS FULLY RESPONSIVE! Whenever you update or create anything, ensure it works perfectly on ALL screen sizes: mobile (sm:), tablet (md:), desktop (lg:, xl:). Use Tailwind responsive classes appropriately. For mobile: stack vertically, smaller padding/fonts, touch-friendly buttons. For desktop: multi-column layouts, proper spacing.";
             if (targetedHint) {
                 PROMPT += `\n\n TARGETED UPDATE MODE: The user targeted ${targetedHint}. ONLY update that element or its closest section. Do NOT change other sections, layout, or styling.`;
             }
@@ -1469,7 +1906,7 @@ export default Navbar;`
                 existingFiles: cleanFiles,
                 isUpdate: isUpdate
             }, {
-                timeout: 95000 // Increased timeout for complex updates
+                timeout: 130000 // Give server-side generation + fallback enough time
             });
 
             if (result.data?.error) {
@@ -1513,11 +1950,19 @@ export default Navbar;`
                 files: mergedFiles,
                 title: nextTitle && nextTitle.length > 0 ? nextTitle : undefined
             });
-            // Only reset Sandpack if the file list actually changed in structure or critical content
-            const oldFileKeys = Object.keys(files).sort().join(',');
-            const newFileKeys = Object.keys(mergedFiles).sort().join(',');
-            if (oldFileKeys !== newFileKeys || isErrorReport) {
-                setSandpackKey(prev => prev + 1);
+            // ALWAYS remount Sandpack after AI generation so content changes are visible
+            // (color changes, new sections, text edits, image swaps all modify existing files
+            //  without changing the file list — Sandpack won't pick those up without a remount)
+            setSandpackKey(prev => prev + 1);
+
+            // Also sync to the embedded workspace preview iframe for instant update
+            try {
+                const iframe = previewWrapperRef.current?.querySelector?.('iframe');
+                if (iframe?.contentWindow) {
+                    iframe.contentWindow.postMessage({ type: 'ELISA_SYNC_FILES', files: mergedFiles }, '*');
+                }
+            } catch (e) {
+                // ignore postMessage errors
             }
         } catch (error) {
             console.error('GenerateAiCode Error:', error);
@@ -1539,6 +1984,7 @@ export default Navbar;`
 
     useEffect(() => {
         if (!filesLoaded) return;
+        
         if (messages?.length > 0) {
             const lastIndex = messages.length - 1;
 
@@ -1547,43 +1993,42 @@ export default Navbar;`
                 lastProcessedIndexRef.current = lastIndex;
                 return;
             }
-            
-            // If we've already processed this message, skip
+
+            // ORIGINAL WORKING LOGIC - KEEP IT SIMPLE!
             if (lastProcessedIndexRef.current >= lastIndex) {
                 return;
             }
 
-            // Find the last 'user' message that hasn't been processed
-            // We look from the end of the messages
             let userMessageIndex = -1;
             for (let i = lastIndex; i >= 0; i--) {
                 if (messages[i].role === 'user') {
                     userMessageIndex = i;
                     break;
                 }
-                // If we hit a command, stop looking for user messages for now
                 if (messages[i].role === 'command') break;
             }
 
             if (userMessageIndex > lastProcessedIndexRef.current) {
-                // If it's a message from DB (fresh load), don't trigger generation 
-                // IF we already have files in state.
                 const latestUserMsg = messages[userMessageIndex];
                 if (latestUserMsg?.fromDb && hasPersistedFilesRef.current) {
-                    lastProcessedIndexRef.current = lastIndex; // Just mark as read
+                    lastProcessedIndexRef.current = lastIndex;
                     return;
                 }
 
-                lastProcessedIndexRef.current = lastIndex; // Mark as read
-
-                // Only generate code if NOT in chatOnly mode
-                if (!chatOnly) {
-                    GenerateAiCode();
+                if (chatOnly) {
+                    lastProcessedIndexRef.current = lastIndex;
+                    return;
                 }
-                return;
+
+                if (!loading && !generationInFlightRef.current) {
+                    // Mark ALL messages up to lastIndex as processed (not just userMessageIndex)
+                    // This handles the case where ChatView adds AI response quickly after user message
+                    lastProcessedIndexRef.current = lastIndex;
+                    GenerateAiCode();
+                    return;
+                }
             }
 
-            // Handle commands
             const lastMsg = messages[lastIndex];
             if (lastMsg.role === 'command') {
                 lastProcessedIndexRef.current = lastIndex;
@@ -1615,7 +2060,7 @@ export default Navbar;`
                 }
             }
         }
-    }, [messages, history, historyIndex, id, UpdateFiles, chatOnly, GenerateAiCode, userId, filesLoaded])
+    }, [messages, history, historyIndex, id, UpdateFiles, chatOnly, GenerateAiCode, userId, filesLoaded, loading])
 
     const downloadFiles = async () => {
         try {
@@ -1712,17 +2157,99 @@ export default Navbar;`
                     }
                 }
 
-                // Add a minimal inline CSS fallback to preserve basic layout/colors when external CSS is blocked
-                const hasTailwind = out.includes('cdn.tailwindcss.com') || out.includes('tailwind.min.css');
-                if (!hasTailwind) {
-                    const fallbackCss = `
-/* Elisa minimal Tailwind fallback */
-body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0}
-.bg-white{background-color:#ffffff}
-.bg-slate-950{background-color:#0f172a}
-.text-slate-200{color:#e2e8f0}
-.text-white{color:#ffffff}
-.text-slate-900{color:#0f172a}
+                const fallbackCss = `
+/* Elisa preview fallback */
+*{box-sizing:border-box}
+:root{--background:#050816;--foreground:#f8fafc;--card:#0f172a;--card-foreground:#f8fafc;--popover:#020617;--popover-foreground:#f8fafc;--primary:#84cc16;--primary-foreground:#04130a;--secondary:#162033;--secondary-foreground:#f8fafc;--muted:#0f172a;--muted-foreground:#94a3b8;--accent:#1e293b;--accent-foreground:#f8fafc;--border:rgba(148,163,184,.28);--input:rgba(148,163,184,.22);--ring:rgba(132,204,22,.45);--radius:1rem;--tw-gradient-from:#84cc16;--tw-gradient-via:#22c55e;--tw-gradient-to:#0f172a}
+html,body,#root{min-height:100%}
+body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:var(--background);color:var(--foreground)}
+a{color:inherit}
+button,input,textarea,select{font:inherit;color:inherit}
+.bg-transparent{background-color:transparent !important}
+.bg-white{background-color:#ffffff !important}
+.bg-white\\/5{background-color:rgba(255,255,255,.05) !important}
+.bg-white\\/10{background-color:rgba(255,255,255,.10) !important}
+.bg-white\\/20{background-color:rgba(255,255,255,.20) !important}
+.bg-black\\/20{background-color:rgba(0,0,0,.20) !important}
+.bg-black\\/30{background-color:rgba(0,0,0,.30) !important}
+.bg-black\\/40{background-color:rgba(0,0,0,.40) !important}
+.bg-black\\/50{background-color:rgba(0,0,0,.50) !important}
+.bg-black\\/60{background-color:rgba(0,0,0,.60) !important}
+.bg-slate-950{background-color:#020617 !important}
+.bg-slate-950\\/60{background-color:rgba(2,6,23,.60) !important}
+.bg-slate-950\\/70{background-color:rgba(2,6,23,.70) !important}
+.bg-slate-950\\/80{background-color:rgba(2,6,23,.80) !important}
+.bg-slate-950\\/90{background-color:rgba(2,6,23,.90) !important}
+.bg-slate-900{background-color:#0f172a !important}
+.bg-slate-900\\/50{background-color:rgba(15,23,42,.50) !important}
+.bg-slate-900\\/60{background-color:rgba(15,23,42,.60) !important}
+.bg-slate-900\\/70{background-color:rgba(15,23,42,.70) !important}
+.bg-slate-900\\/80{background-color:rgba(15,23,42,.80) !important}
+.bg-slate-900\\/90{background-color:rgba(15,23,42,.90) !important}
+.bg-slate-800{background-color:#1e293b !important}
+.bg-background{background-color:var(--background) !important}
+.bg-card{background-color:var(--card) !important}
+.bg-card\\/40,.bg-card\\/50,.bg-card\\/60,.bg-card\\/70,.bg-card\\/80,.bg-card\\/85,.bg-card\\/95{background-color:rgba(15,23,42,.72) !important}
+.bg-primary{background-color:var(--primary) !important}
+.bg-primary\\/5{background-color:rgba(132,204,22,.05) !important}
+.bg-primary\\/10{background-color:rgba(132,204,22,.10) !important}
+.bg-primary\\/20{background-color:rgba(132,204,22,.20) !important}
+.bg-primary\\/30{background-color:rgba(132,204,22,.30) !important}
+.bg-secondary{background-color:var(--secondary) !important}
+.bg-accent{background-color:var(--accent) !important}
+.bg-muted{background-color:var(--muted) !important}
+.bg-foreground{background-color:var(--foreground) !important}
+.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-from),var(--tw-gradient-via),var(--tw-gradient-to)) !important}
+.bg-gradient-to-br{background-image:linear-gradient(to bottom right,var(--tw-gradient-from),var(--tw-gradient-via),var(--tw-gradient-to)) !important}
+.from-primary,.from-lime-400,.from-lime-500,.from-green-400,.from-green-500{--tw-gradient-from:#84cc16 !important}
+.from-emerald-400,.from-emerald-500{--tw-gradient-from:#34d399 !important}
+.from-blue-500,.from-blue-600{--tw-gradient-from:#3b82f6 !important}
+.from-indigo-500,.from-indigo-600{--tw-gradient-from:#6366f1 !important}
+.from-purple-500,.from-purple-600{--tw-gradient-from:#8b5cf6 !important}
+.from-rose-500,.from-pink-500{--tw-gradient-from:#f43f5e !important}
+.to-primary,.to-lime-400,.to-lime-500,.to-green-500,.to-green-600{--tw-gradient-to:#65a30d !important}
+.to-emerald-500,.to-emerald-600{--tw-gradient-to:#10b981 !important}
+.to-blue-500,.to-blue-600{--tw-gradient-to:#2563eb !important}
+.to-indigo-500,.to-indigo-600{--tw-gradient-to:#4f46e5 !important}
+.to-purple-500,.to-purple-600{--tw-gradient-to:#7c3aed !important}
+.to-rose-500,.to-pink-500{--tw-gradient-to:#ec4899 !important}
+.via-emerald-500,.via-green-500{--tw-gradient-via:#22c55e !important}
+.via-blue-500{--tw-gradient-via:#3b82f6 !important}
+.text-white{color:#ffffff !important}
+.text-white\\/60{color:rgba(255,255,255,.60) !important}
+.text-white\\/70{color:rgba(255,255,255,.70) !important}
+.text-white\\/80{color:rgba(255,255,255,.80) !important}
+.text-slate-100{color:#f1f5f9 !important}
+.text-slate-200{color:#e2e8f0 !important}
+.text-slate-300{color:#cbd5e1 !important}
+.text-slate-400{color:#94a3b8 !important}
+.text-slate-500{color:#64748b !important}
+.text-slate-900{color:#0f172a !important}
+.text-foreground{color:var(--foreground) !important}
+.text-background{color:var(--background) !important}
+.text-card-foreground{color:var(--card-foreground) !important}
+.text-primary{color:var(--primary) !important}
+.text-primary-foreground{color:var(--primary-foreground) !important}
+.text-secondary-foreground{color:var(--secondary-foreground) !important}
+.text-accent-foreground{color:var(--accent-foreground) !important}
+.text-muted-foreground{color:var(--muted-foreground) !important}
+.border-white\\/10{border-color:rgba(255,255,255,.10) !important}
+.border-white\\/15{border-color:rgba(255,255,255,.15) !important}
+.border-white\\/20{border-color:rgba(255,255,255,.20) !important}
+.border-slate-700{border-color:#334155 !important}
+.border-border,.border-border\\/60,.border-border\\/70{border-color:var(--border) !important}
+.border-input{border-color:var(--input) !important}
+.border-primary,.border-primary\\/20,.border-primary\\/30,.border-primary\\/40,.border-primary\\/50,.border-primary\\/60{border-color:rgba(132,204,22,.45) !important}
+.ring-ring{box-shadow:0 0 0 1px var(--ring) !important}
+.shadow-xl{box-shadow:0 20px 45px rgba(15,23,42,.35) !important}
+.shadow-2xl{box-shadow:0 25px 60px rgba(15,23,42,.45) !important}
+.shadow-primary\\/20{box-shadow:0 18px 40px rgba(132,204,22,.18) !important}
+.shadow-black\\/5{box-shadow:0 10px 30px rgba(0,0,0,.18) !important}
+.backdrop-blur-sm,.backdrop-blur-md,.backdrop-blur-xl{backdrop-filter:blur(12px) !important}
+.rounded-xl{border-radius:.75rem}
+.rounded-2xl{border-radius:1rem}
+.rounded-3xl{border-radius:1.5rem}
+.rounded-full{border-radius:9999px}
 .max-w-6xl{max-width:72rem}
 .mx-auto{margin-left:auto;margin-right:auto}
 .px-6{padding-left:1.5rem;padding-right:1.5rem}
@@ -1733,15 +2260,22 @@ body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Hel
 .tracking-tight{letter-spacing:-0.01em}
 .text-sm{font-size:0.875rem}
 .text-xs{font-size:0.75rem}
+button[class],a[class*="bg-"],a[class*="border"],a[class*="rounded"]{transition:all .2s ease}
+button[class*="bg-primary"],a[class*="bg-primary"]{background:var(--primary) !important;color:var(--primary-foreground) !important;border:1px solid rgba(132,204,22,.42)}
+button[class*="bg-foreground"],a[class*="bg-foreground"]{background:var(--foreground) !important;color:var(--background) !important}
+button[class*="border"],a[class*="border"]{border-width:1px;border-style:solid}
+input[class],textarea[class],select[class]{background:rgba(15,23,42,.58) !important;border:1px solid var(--input) !important;color:var(--foreground) !important}
+input::placeholder,textarea::placeholder{color:rgba(148,163,184,.6)}
+.text-transparent.bg-clip-text,.bg-clip-text.text-transparent{color:var(--foreground) !important;-webkit-text-fill-color:currentColor !important;background-clip:border-box !important;-webkit-background-clip:border-box !important}
+.bg-clip-text{background-clip:border-box !important;-webkit-background-clip:border-box !important}
 `;
-                    const styleTag = `<style id="elisa-tailwind-fallback">${fallbackCss}</style>`;
-                    if (out.match(/<\/head>/i)) {
-                        out = out.replace(/<\/head>/i, `    ${styleTag}\n  </head>`);
-                    } else if (out.match(/<head[^>]*>/i)) {
-                        out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${styleTag}`);
-                    } else {
-                        out = styleTag + '\n' + out;
-                    }
+                const styleTag = `<style id="elisa-tailwind-fallback">${fallbackCss}</style>`;
+                if (out.match(/<\/head>/i)) {
+                    out = out.replace(/<\/head>/i, `    ${styleTag}\n  </head>`);
+                } else if (out.match(/<head[^>]*>/i)) {
+                    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${styleTag}`);
+                } else {
+                    out = styleTag + '\n' + out;
                 }
 
                 return out;
@@ -1855,6 +2389,19 @@ export default defineConfig({
             const cleanPath = toSandboxPath(path);
             validated[cleanPath] = { code: fixUnsafeSandboxCode(toSandboxCode(content)) };
         });
+
+        const syntaxIssues = [];
+        Object.entries(validated).forEach(([path, content]) => {
+            const issues = getJsxParseIssues(path, toSandboxCode(content));
+            if (issues.length > 0) {
+                syntaxIssues.push(...issues);
+                validated[path] = { code: buildSafeReactFallback(path) };
+            }
+        });
+
+        if (syntaxIssues.length > 0) {
+            console.warn('Preview syntax recovery applied:', syntaxIssues.slice(0, 8));
+        }
 
         // Inject Selector Helper if active
         // NOTE: We inject the script logic regardless of active state, 
@@ -2061,7 +2608,8 @@ if (typeof window !== 'undefined') {
             };
         }
 
-        return validated;
+        return ensureImportedLocalComponentDefaults(ensureLocalImportTargets(validated));
+
     }, [files]);
 
     const sandpackConfig = useMemo(() => {
@@ -2087,11 +2635,43 @@ if (typeof window !== 'undefined') {
             const input = typeof html === 'string' ? html : '';
             if (!input.trim()) return input;
             let out = input;
-            // ALWAYS ensure Tailwind for preview - don't skip
+            const hasTailwindConfig = out.includes('tailwind.config');
+            const hasPrebuiltTailwind = out.includes('tailwind.min.css');
             const hasTailwind = out.includes('cdn.tailwindcss.com');
             const hasTypography = out.includes('@tailwindcss/typography');
 
             const headInjections = [
+                !hasTailwindConfig
+                    ? `<script>
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              background: "var(--background)",
+              foreground: "var(--foreground)",
+              card: "var(--card)",
+              "card-foreground": "var(--card-foreground)",
+              primary: "var(--primary)",
+              "primary-foreground": "var(--primary-foreground)",
+              secondary: "var(--secondary)",
+              "secondary-foreground": "var(--secondary-foreground)",
+              muted: "var(--muted)",
+              "muted-foreground": "var(--muted-foreground)",
+              accent: "var(--accent)",
+              "accent-foreground": "var(--accent-foreground)",
+              border: "var(--border)",
+              input: "var(--input)",
+              ring: "var(--ring)"
+            }
+          }
+        }
+      };
+    </script>`
+                    : null,
+                !hasPrebuiltTailwind
+                    ? '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />'
+                    : null,
                 !hasTypography
                     ? '<link rel="stylesheet" href="https://unpkg.com/@tailwindcss/typography@0.5.10/dist/typography.min.css" />'
                     : null,
@@ -2114,7 +2694,6 @@ if (typeof window !== 'undefined') {
 ${out}
 </body>
 </html>`;
-                    return out;
                 }
             }
 
@@ -2125,6 +2704,35 @@ ${out}
                     out = out.replace(/<\/body>/i, `${scriptTag}\n  </body>`);
                 } else {
                     out = out + `\n${scriptTag}`;
+                }
+            }
+
+            const fallbackCss = `
+/* Elisa preview rescue */
+*{box-sizing:border-box}
+:root{--background:#050816;--foreground:#f8fafc;--card:#0f172a;--card-foreground:#f8fafc;--primary:#84cc16;--primary-foreground:#04130a;--secondary:#162033;--secondary-foreground:#f8fafc;--muted:#0f172a;--muted-foreground:#94a3b8;--accent:#1e293b;--accent-foreground:#f8fafc;--border:rgba(148,163,184,.28);--input:rgba(148,163,184,.22);--ring:rgba(132,204,22,.45);--tw-gradient-from:#84cc16;--tw-gradient-via:#22c55e;--tw-gradient-to:#0f172a}
+html,body,#root{min-height:100%}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;height:auto}
+button,input,textarea,select{font:inherit}
+.bg-background{background-color:var(--background)!important}.bg-foreground{background-color:var(--foreground)!important}.bg-card{background-color:var(--card)!important}.bg-primary{background-color:var(--primary)!important}.bg-secondary{background-color:var(--secondary)!important}.bg-muted{background-color:var(--muted)!important}.bg-accent{background-color:var(--accent)!important}
+.text-background{color:var(--background)!important}.text-foreground{color:var(--foreground)!important}.text-card-foreground{color:var(--card-foreground)!important}.text-primary{color:var(--primary)!important}.text-primary-foreground{color:var(--primary-foreground)!important}.text-secondary-foreground{color:var(--secondary-foreground)!important}.text-muted-foreground{color:var(--muted-foreground)!important}.text-accent-foreground{color:var(--accent-foreground)!important}
+.border-border{border-color:var(--border)!important}.border-input{border-color:var(--input)!important}.ring-ring{box-shadow:0 0 0 1px var(--ring)!important}
+.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-from),var(--tw-gradient-via),var(--tw-gradient-to))!important}.bg-gradient-to-br{background-image:linear-gradient(to bottom right,var(--tw-gradient-from),var(--tw-gradient-via),var(--tw-gradient-to))!important}
+.from-primary{--tw-gradient-from:var(--primary)!important}.via-primary{--tw-gradient-via:var(--primary)!important}.to-primary{--tw-gradient-to:var(--primary)!important}
+input[class],textarea[class],select[class]{background:rgba(15,23,42,.58);border:1px solid var(--input);color:var(--foreground)}
+.text-transparent.bg-clip-text,.bg-clip-text.text-transparent{color:var(--foreground)!important;-webkit-text-fill-color:currentColor!important;background-clip:border-box!important;-webkit-background-clip:border-box!important}
+.bg-clip-text{background-clip:border-box!important;-webkit-background-clip:border-box!important}
+`;
+            if (!out.includes('elisa-preview-rescue')) {
+                const styleTag = `<style id="elisa-preview-rescue">${fallbackCss}</style>`;
+                if (out.match(/<\/head>/i)) {
+                    out = out.replace(/<\/head>/i, `    ${styleTag}\n  </head>`);
+                } else if (out.match(/<head[^>]*>/i)) {
+                    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n    ${styleTag}`);
+                } else {
+                    out = `${styleTag}\n${out}`;
                 }
             }
             return out;

@@ -4,7 +4,7 @@ import { motion, useScroll, useTransform } from 'framer-motion';
 import { Globe, Palette, Shield, Rocket, Heart, Cloud } from 'lucide-react';
 
 const extraFeatures = [
-    { icon: <Globe className="w-10 h-10" />, title: "Global Deployment", desc: "Launch your site to a global CDN with one click. Fast, secure, and reliable." },
+    { icon: <Globe className="w-10 h-10" />, title: "Live Preview", desc: "Real-time preview updates as you build. See changes instantly without refresh." },
     { icon: <Palette className="w-10 h-10" />, title: "Smart Theming", desc: "Our engine autonomously defines cohesive color palettes and typography." },
     { icon: <Shield className="w-10 h-10" />, title: "Secure by Design", desc: "Production-ready code that follows the latest security best practices." },
     { icon: <Rocket className="w-10 h-10" />, title: "SEO Optimized", desc: "Built-in SEO meta tags and semantic structure for maximum visibility." },

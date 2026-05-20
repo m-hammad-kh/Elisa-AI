@@ -2,43 +2,43 @@ const Lookup = {
     SUGGSTIONS: [
         {
             label: 'Restaurant Website',
-            prompt: 'Create a modern restaurant website with a dark theme, gold gradients, and sections for Menu, Reservations, and Gallery.'
+            prompt: 'Create a cinematic restaurant website for "Saffron & Smoke" with an editorial food-photography hero, chef story, signature menu, private dining, reservations, gallery, testimonials, and a contact page with a visible map.'
         },
         {
             label: 'Portfolio Website',
-            prompt: 'Build a professional portfolio for a photographer with a minimalist bento grid layout and smooth scroll animations.'
+            prompt: 'Build a premium photographer portfolio for "Northlight Studio" with a full-bleed landscape hero, curated gallery collections, services, process, client stories, booking CTA, and a contact section with a map. Use an elegant layout, not a bento grid.'
         },
         {
             label: 'SaaS Landing Page',
-            prompt: 'Create a high-end SaaS landing page for an AI tool with glassmorphism, mesh gradients, and a pricing section.'
+            prompt: 'Create a polished SaaS website for "OrbitIQ", an AI operations platform, with a sharp product hero, feature deep-dives, workflow steps, integrations, security proof, customer outcomes, pricing, FAQ, and contact/demo booking.'
         },
         {
             label: 'Real Estate Website',
-            prompt: 'Develop a multi-page real estate website with interactive maps, property listings, and a contact form.'
+            prompt: 'Develop a multi-page real estate website for "Harbor & Key" with neighborhood-focused property listings, featured homes, agent profiles, buying/selling guides, market stats, testimonials, and a contact page with map.'
         },
         {
             label: 'E-commerce Store',
-            prompt: 'Create a colorful and vibrant e-commerce landing page for a premium brand with product grids and hover effects.'
+            prompt: 'Create a premium e-commerce website for a modern skincare brand with a sensory hero, best sellers, product benefits, ingredient story, bundles, reviews, editorial lifestyle images, FAQ, and contact/support.'
         },
         {
             label: 'Corporate Site',
-            prompt: 'Build a clean and professional corporate website with sections for Services, Team, FAQ, and a multi-column footer.'
+            prompt: 'Build a refined corporate website for "Aster Strategy Group" with a confident hero, services, industries, case studies, leadership team, process, FAQ, contact page with map, and a polished multi-column footer.'
         },
         {
             label: 'Fitness Studio Website',
-            prompt: 'Design a bold fitness studio website with trainer profiles, pricing tiers, and a class schedule section.'
+            prompt: 'Design an energetic fitness studio website for "Pulse Forge" with a powerful training hero, programs, trainer profiles, class schedule, transformations, membership pricing, testimonials, and a contact/location map.'
         },
         {
             label: 'Travel Planner',
-            prompt: 'Create a travel planning website with destination cards, a map section, and a newsletter signup.'
+            prompt: 'Create an immersive travel planning website for "Wayline Trips" with destination storytelling, itinerary builder sections, curated packages, traveler reviews, seasonal picks, image-rich guides, newsletter, and contact/map.'
         },
         {
             label: 'Marketing Agency Website',
-            prompt: 'Build a modern marketing agency website with case studies, services, and a lead capture section.'
+            prompt: 'Build a bold marketing agency website for "Signal House" with a memorable hero, campaign services, case-study snapshots, creative process, client logos, measurable results, lead-capture form, and contact page with map.'
         },
         {
             label: 'Event Website',
-            prompt: 'Create an event website with speaker lineup, schedule, ticket pricing, and venue details.'
+            prompt: 'Create a vibrant conference website for "FutureStack Summit" with a striking event hero, speaker lineup, agenda, workshops, sponsor strip, ticket tiers, venue details, FAQ, and contact/map.'
         }
     ],
 
@@ -51,6 +51,28 @@ const Lookup = {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Website</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />
+    <script>
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              background: "var(--background)",
+              foreground: "var(--foreground)",
+              card: "var(--card)",
+              "card-foreground": "var(--card-foreground)",
+              primary: "var(--primary)",
+              "primary-foreground": "var(--primary-foreground)",
+              muted: "var(--muted)",
+              "muted-foreground": "var(--muted-foreground)",
+              border: "var(--border)",
+              input: "var(--input)"
+            }
+          }
+        }
+      };
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
   <body>
