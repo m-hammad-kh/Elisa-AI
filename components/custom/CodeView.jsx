@@ -1453,41 +1453,42 @@ function CodeView() {
 
             let code = toSandboxCode(next[path]) || '';
             
-            // 🔴 FIX: If there's already ANY default export, DO NOT ADD ANOTHER ONE!
-            if (/\bexport\s+default\b/.test(code)) {
-                setFile(path, code);
-                return;
-            }
-
+            // Check if there's already a default export
+            const hasDefaultExport = /\bexport\s+default\b/.test(code);
+            
             // Remove incorrect curly imports of the same component
             code = code.replace(new RegExp(`import\\s+\\{\\s*${componentName}\\s*\\}\\s+from\\s+['"][^'"]+['"];?`, 'g'), '');
 
+            // Check if we have the component declaration
             const hasDeclaration = new RegExp(`\\b(function|const|class|let|var)\\s+${componentName}\\b`).test(code);
-            if (hasDeclaration) {
+            
+            // If no default export but we have the declaration, add it
+            if (!hasDefaultExport && hasDeclaration) {
                 code = `${code}\n\nexport default ${componentName};`;
                 setFile(path, code);
                 return;
             }
 
-            // If the file has substantial JSX content (AI-generated component),
-            // just wrap it in a default export instead of appending fallback code.
-            const trimmedCode = code.trim();
-            if (trimmedCode.length > 30 && (trimmedCode.includes('<') || trimmedCode.includes('return'))) {
-                // Try to find any function/arrow component and export it
-                const anyFuncMatch = trimmedCode.match(/(?:const|function|let|var)\s+([A-Z]\w+)/);
-                if (anyFuncMatch) {
-                    code = `${code}\n\nexport default ${anyFuncMatch[1]};`;
-                    setFile(path, code);
-                    return;
+            // If no default export at all, try to find ANY component to export
+            if (!hasDefaultExport) {
+                const trimmedCode = code.trim();
+                if (trimmedCode.length > 30 && (trimmedCode.includes('<') || trimmedCode.includes('return'))) {
+                    // Try to find any function/arrow component and export it
+                    const anyFuncMatch = trimmedCode.match(/(?:const|function|let|var)\s+([A-Z]\w+)/);
+                    if (anyFuncMatch) {
+                        code = `${code}\n\nexport default ${anyFuncMatch[1]};`;
+                        setFile(path, code);
+                        return;
+                    }
                 }
-                // Last resort: wrap the entire code as a default export component
-                code = `import React from 'react';\n\nconst ${componentName} = () => {\n  return (\n    ${trimmedCode.startsWith('<') ? trimmedCode : `<>${trimmedCode}</>`}\n  );\n};\n\nexport default ${componentName};`;
-                setFile(path, code);
+                
+                // Last resort: use fallback
+                setFile(path, fallbackCode);
                 return;
             }
 
-            // Only use fallback for truly empty or broken files
-            setFile(path, fallbackCode);
+            // Already has default export - just ensure it's properly set
+            setFile(path, code);
         };
 
         // If we have both .jsx and .js for the same component, prefer the .jsx and delete the .js to avoid duplication/conflicts
