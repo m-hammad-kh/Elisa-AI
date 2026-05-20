@@ -1,5 +1,5 @@
 "use client"
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { parse as parseBabel } from '@babel/parser';
 import { SandpackProvider, SandpackPreview } from "@codesandbox/sandpack-react";
 import { useQuery } from 'convex/react';
@@ -549,7 +549,7 @@ const ensureImportedLocalComponentDefaults = (fileMap) => {
     const baseName = path.split('/').pop() || 'RecoveredComponent';
     const componentName = baseName.replace(/\.(jsx|tsx|js|ts)$/i, '').replace(/[^A-Za-z0-9_$]/g, '') || 'RecoveredComponent';
 
-    if (new RegExp(`\b(function|const|class|let|var)\s+${componentName}\b`).test(code)) {
+    if (new RegExp(`\\b(function|const|class|let|var)\\s+${componentName}\\b`).test(code)) {
       return `${code}\n\nexport default ${componentName};`;
     }
 

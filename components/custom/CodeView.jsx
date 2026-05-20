@@ -728,7 +728,7 @@ const ensureImportedLocalComponentDefaults = (fileMap) => {
         const baseName = path.split('/').pop() || 'RecoveredComponent';
         const componentName = baseName.replace(/\.(jsx|tsx|js|ts)$/i, '').replace(/[^A-Za-z0-9_$]/g, '') || 'RecoveredComponent';
 
-        if (new RegExp(`\b(function|const|class|let|var)\s+${componentName}\b`).test(code)) {
+        if (new RegExp(`\\b(function|const|class|let|var)\\s+${componentName}\\b`).test(code)) {
             return `${code}\n\nexport default ${componentName};`;
         }
 
